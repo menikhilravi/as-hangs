@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Tangle — spike</title>
+<style>html,body{margin:0;height:100%;background:#1a1612;overflow:hidden}canvas{display:block;width:100vw;height:100vh}
+#log{position:fixed;left:12px;bottom:10px;font:12px ui-monospace,monospace;color:#cbb;white-space:pre}</style>
+</head><body><canvas id="c"></canvas><div id="log"></div>
+<script>
+// ---------- cord in a tumbling box: PBD with substeps and segment–segment self-collision ----------
+const Q = new URLSearchParams(location.search);
+const L = +(Q.get('L') || 1.2), N = +(Q.get('n') || 160), B = +(Q.get('box') || 0.13), RAD = 0.0032;
+const seg = L / N, SUB = 24, DT = 1 / 60 / SUB;
+let seed = +(Q.get('seed') || 7);
+const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+const X = new Float64Array(3 * (N + 1)), Pv = new Float64Array(3 * (N + 1)), V = new Float64Array(3 * (N + 1));
+// start as a loose meander lying in the box
+for (let i = 0; i <= N; i++){ const t = i / N; X[3*i] = (Math.sin(t * 9.1) * .5) * (B * .7); X[3*i+1] = -B/2 + RAD + t * .0; X[3*i+2] = (t - .5) * B * .8 + Math.cos(t * 13.) * .01; }
+for (let it = 0; it < 50; it++) for (let i = 0; i < N; i++) fixLen(i);
+const TEST = Q.get('test');
+if (TEST){ for (let i = 0; i <= N; i++){ const t = i / N * 2 * Math.PI * .995; let p;
+  if (TEST === 'trefoil') p = [Math.sin(t) + 2*Math.sin(2*t), Math.cos(t) - 2*Math.cos(2*t), -Math.sin(3*t)];
+  else if (TEST === 'fig8') p = [(2 + Math.cos(2*t)) * Math.cos(3*t), (2 + Math.cos(2*t)) * Math.sin(3*t), Math.sin(4*t)];
+  else if (TEST === 'cinq') p = [(2 + Math.cos(5*t/2*2/2)) * Math.cos(2*t), (2 + Math.cos(5*t)) * Math.sin(2*t), Math.sin(5*t)];
+  else p = [Math.cos(t), Math.sin(t), .3*Math.sin(2*t)];
+  X[3*i] = p[0] * .02; X[3*i+1] = p[1] * .02; X[3*i+2] = p[2] * .02; } }
+function fixLen(i){ const a = 3*i, b = 3*(i+1); const dx = X[b]-X[a], dy = X[b+1]-X[a+1], dz = X[b+2]-X[a+2]; const d = Math.hypot(dx, dy, dz) || 1e-9; const k = (d - seg) / d * .5;
+  X[a] += dx*k; X[a+1] += dy*k; X[a+2] += dz*k; X[b] -= dx*k; X[b+1] -= dy*k; X[b+2] -= dz*k; }
+// segment-segment closest points
+function segSeg(i, j, out){
+  const a = 3*i, b = 3*(i+1), c = 3*j, d = 3*(j+1);
+  const d1x = X[b]-X[a], d1y = X[b+1]-X[a+1], d1z = X[b+2]-X[a+2], d2x = X[d]-X[c], d2y = X[d+1]-X[c+1], d2z = X[d+2]-X[c+2];
+  const rx = X[a]-X[c], ry = X[a+1]-X[c+1], rz = X[a+2]-X[c+2];
+  const A = d1x*d1x+d1y*d1y+d1z*d1z, E = d2x*d2x+d2y*d2y+d2z*d2z, F = d2x*rx+d2y*ry+d2z*rz, C = d1x*rx+d1y*ry+d1z*rz, Bb = d1x*d2x+d1y*d2y+d1z*d2z;
+  const den = A*E - Bb*Bb; let s = den > 1e-14 ? Math.min(1, Math.max(0, (Bb*F - C*E) / den)) : 0; let t = (Bb*s + F) / E;
+  if (t < 0){ t = 0; s = Math.min(1, Math.max(0, -C / A)); } else if (t > 1){ t = 1; s = Math.min(1, Math.max(0, (Bb - C) / A)); }
+  out[0] = s; out[1] = t;
+  const px = X[a]+d1x*s - (X[c]+d2x*t), py = X[a+1]+d1y*s - (X[c+1]+d2y*t), pz = X[a+2]+d1z*s - (X[c+2]+d2z*t);
+  out[2] = px; out[3] = py; out[4] = pz; return Math.hypot(px, py, pz);
+}
+const tmp = new Float64Array(5);
+const CELL = 2 * RAD + seg, GN = Math.ceil(B / CELL) + 2;
+const grid = new Map();
+let time = 0, maxPen = 0;
+function step(){
+  const om = 2 * Math.PI * .9; // box rotation (rad/s), Raymer & Smith tumbled at ~1 rev/s
+  for (let s = 0; s < SUB; s++){
+    time += DT;
+    const gx = 9.81 * Math.sin(om * time), gy = -9.81 * Math.cos(om * time);
+    const jolt = (Math.sin(time * 17.) > .9) ? 60 : 0;
+    for (let i = 0; i <= N; i++){ const k = 3*i; Pv[k] = X[k]; Pv[k+1] = X[k+1]; Pv[k+2] = X[k+2];
+      V[k] = V[k]*.9995 + (gx + jolt*(rnd()-.5)) * DT; V[k+1] = V[k+1]*.9995 + gy * DT; V[k+2] = V[k+2]*.9995 + jolt*(rnd()-.5) * DT;
+      X[k] += V[k] * DT; X[k+1] += V[k+1] * DT; X[k+2] += V[k+2] * DT; }
+    for (let it = 0; it < 3; it++){
+      for (let i = 0; i < N; i++) fixLen(i);
+      // bending stiffness (weak): pull i toward midpoint of neighbours
+      for (let i = 1; i < N; i++){ const a = 3*(i-1), m = 3*i, b = 3*(i+1); for (let c = 0; c < 3; c++){ const mid = (X[a+c] + X[b+c]) * .5; X[m+c] += (mid - X[m+c]) * .04; } }
+      // self-collision via hash of segment midpoints
+      grid.clear();
+      for (let i = 0; i < N; i++){ const a = 3*i, b = 3*(i+1); const cx = Math.floor(((X[a]+X[b])*.5 + B) / CELL), cy = Math.floor(((X[a+1]+X[b+1])*.5 + B) / CELL), cz = Math.floor(((X[a+2]+X[b+2])*.5 + B) / CELL);
+        const key = (cx * 73856093) ^ (cy * 19349663) ^ (cz * 83492791); let arr = grid.get(key); if (!arr) grid.set(key, arr = []); arr.push(i, cx, cy, cz); }
+      for (let i = 0; i < N; i++){
+        const a = 3*i, b = 3*(i+1); const cx = Math.floor(((X[a]+X[b])*.5 + B) / CELL), cy = Math.floor(((X[a+1]+X[b+1])*.5 + B) / CELL), cz = Math.floor(((X[a+2]+X[b+2])*.5 + B) / CELL);
+        for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) for (let oz = -1; oz <= 1; oz++){
+          const arr = grid.get(((cx+ox) * 73856093) ^ ((cy+oy) * 19349663) ^ ((cz+oz) * 83492791)); if (!arr) continue;
+          for (let q = 0; q < arr.length; q += 4){ const j = arr[q]; if (j <= i + 2) continue; if (arr[q+1] !== cx+ox || arr[q+2] !== cy+oy || arr[q+3] !== cz+oz) continue;
+            const d = segSeg(i, j, tmp); if (d < 2*RAD && d > 1e-12){ const pen = 2*RAD - d; if (time > .5) maxPen = Math.max(maxPen, pen / (2*RAD)); const nx = tmp[2]/d, ny = tmp[3]/d, nz = tmp[4]/d; const sA = tmp[0], tB = tmp[1];
+              const w = pen * .5; X[a] += nx*w*(1-sA); X[a+1] += ny*w*(1-sA); X[a+2] += nz*w*(1-sA); X[b] += nx*w*sA; X[b+1] += ny*w*sA; X[b+2] += nz*w*sA;
+              const c = 3*j, e = 3*(j+1); X[c] -= nx*w*(1-tB); X[c+1] -= ny*w*(1-tB); X[c+2] -= nz*w*(1-tB); X[e] -= nx*w*tB; X[e+1] -= ny*w*tB; X[e+2] -= nz*w*tB; } }
+        }
+      }
+      // box walls with friction
+      const h = B / 2 - RAD;
+      for (let i = 0; i <= N; i++){ const k = 3*i; for (let c = 0; c < 3; c++){ if (X[k+c] > h){ X[k+c] = h; for (let o = 1; o < 3; o++){ const cc = (c+o)%3; X[k+cc] = X[k+cc]*.96 + Pv[k+cc]*.04; } } else if (X[k+c] < -h){ X[k+c] = -h; for (let o = 1; o < 3; o++){ const cc = (c+o)%3; X[k+cc] = X[k+cc]*.96 + Pv[k+cc]*.04; } } } }
+    }
+    for (let i = 0; i <= 3*N+2; i++) V[i] = (X[i] - Pv[i]) / DT;
+  }
+}
+// ---------- knot determinant |Δ(-1)| via the colouring matrix of a projected diagram ----------
+function knotDet(dir, cdir){
+  // stochastic closure: both ends run to infinity in parallel along cdir and join there (Millett-style)
+  const pts = []; for (let i = 0; i <= N; i++) pts.push([X[3*i], X[3*i+1], X[3*i+2]]);
+  const A = [pts[N][0] + cdir[0]*10, pts[N][1] + cdir[1]*10, pts[N][2] + cdir[2]*10];
+  const Z = [pts[0][0] + cdir[0]*10, pts[0][1] + cdir[1]*10, pts[0][2] + cdir[2]*10];
+  const ring = [...pts, A, Z];
+  // projection basis
+  const u = Math.abs(dir[1]) < .9 ? [0,1,0] : [1,0,0]; let e1 = [dir[1]*u[2]-dir[2]*u[1], dir[2]*u[0]-dir[0]*u[2], dir[0]*u[1]-dir[1]*u[0]]; const l1 = Math.hypot(...e1); e1 = e1.map(v => v/l1);
+  const e2 = [dir[1]*e1[2]-dir[2]*e1[1], dir[2]*e1[0]-dir[0]*e1[2], dir[0]*e1[1]-dir[1]*e1[0]];
+  const P2 = ring.map(p => [p[0]*e1[0]+p[1]*e1[1]+p[2]*e1[2], p[0]*e2[0]+p[1]*e2[1]+p[2]*e2[2], p[0]*dir[0]+p[1]*dir[1]+p[2]*dir[2]]);
+  const M = P2.length; // closed polygon: segments k: P2[k] → P2[(k+1)%M]
+  const cross = []; // {s: segment param along curve, over: bool, id}
+  for (let i = 0; i < M; i++) for (let j = i + 2; j < M; j++){
+    if (i === 0 && j === M - 1) continue;
+    const a = P2[i], b = P2[(i+1)%M], c = P2[j], d = P2[(j+1)%M];
+    const r = [b[0]-a[0], b[1]-a[1]], s = [d[0]-c[0], d[1]-c[1]]; const den = r[0]*s[1] - r[1]*s[0]; if (Math.abs(den) < 1e-15) continue;
+    const t = ((c[0]-a[0])*s[1] - (c[1]-a[1])*s[0]) / den, w = ((c[0]-a[0])*r[1] - (c[1]-a[1])*r[0]) / den;
+    if (t < 0 || t > 1 || w < 0 || w > 1) continue;
+    const zi = a[2] + (b[2]-a[2])*t, zj = c[2] + (d[2]-c[2])*w;
+    const id = cross.length / 2;
+    cross.push({ pos: i + t, over: zi > zj, id }, { pos: j + w, over: zj > zi, id });
+  }
+  const n = cross.length / 2; if (n === 0) return { det: 1, n: 0 };
+  cross.sort((p, q) => p.pos - q.pos);
+  // arcs: break at each undercrossing; arc index increments after each under-pass
+  const unders = cross.filter(c => !c.over); const m = unders.length;
+  let arc = 0; const overArc = new Array(n), inArc = new Array(n), outArc = new Array(n);
+  // find starting arc: arcs run between consecutive under-passes, cyclically
+  for (const c of cross){ if (c.over) overArc[c.id] = arc; else { inArc[c.id] = arc; arc = (arc + 1) % m; outArc[c.id] = arc; } }
+  // over-crossings before the first under belong to the last arc (cyclic)
+  const Mx = Array.from({ length: n }, () => new Float64Array(m));
+  for (let k = 0; k < n; k++){ Mx[k][overArc[k]] += 2; Mx[k][inArc[k]] -= 1; Mx[k][outArc[k]] -= 1; }
+  // determinant of minor (drop last row and col) by Gaussian elimination with partial pivoting
+  const sz = Math.min(n, m) - 1; if (sz <= 0) return { det: 1, n };
+  const Am = Array.from({ length: sz }, (_, r) => Array.from(Mx[r].slice(0, sz)));
+  let det = 1;
+  for (let c = 0; c < sz; c++){ let piv = c; for (let r = c + 1; r < sz; r++) if (Math.abs(Am[r][c]) > Math.abs(Am[piv][c])) piv = r;
+    if (Math.abs(Am[piv][c]) < 1e-9) return { det: 0, n }; if (piv !== c){ [Am[piv], Am[c]] = [Am[c], Am[piv]]; det = -det; }
+    det *= Am[c][c]; for (let r = c + 1; r < sz; r++){ const f = Am[r][c] / Am[c][c]; for (let k = c; k < sz; k++) Am[r][k] -= f * Am[c][k]; } }
+  return { det: Math.round(Math.abs(det)), n };
+}
+const NAMES = { 1: 'unknot', 3: 'trefoil (3₁)', 5: 'figure-eight (4₁) or cinquefoil (5₁)', 7: '5₂', 9: '6₁ / granny / square', 11: '6₂', 13: '6₃' };
+function classify(){ // majority over several projection directions (diagrams differ, invariant shouldn't)
+  const rdir = () => { const th = rnd() * Math.PI * 2, ph = Math.acos(2 * rnd() - 1); return [Math.sin(ph)*Math.cos(th), Math.sin(ph)*Math.sin(th), Math.cos(ph)]; };
+  const votes = {}; for (let k = 0; k < 9; k++){ const r = knotDet(rdir(), rdir()); votes[r.det] = (votes[r.det] || 0) + 1; }
+  let best = 1, bv = -1; for (const k in votes) if (votes[k] > bv){ bv = votes[k]; best = +k; } return { det: best, votes };
+}
+// ---------- quick 2D render (depth-sorted shaded tube) ----------
+const cv = document.getElementById('c'), g = cv.getContext('2d'); const dpr = Math.min(devicePixelRatio, 2);
+cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
+function draw(){
+  const W = cv.width, H = cv.height, S = Math.min(W, H) / B * .78; g.fillStyle = '#1d1813'; g.fillRect(0, 0, W, H);
+  // box rim
+  g.strokeStyle = 'rgba(200,160,110,.25)'; g.lineWidth = 2 * dpr; g.strokeRect(W/2 - B/2*S, H/2 - B/2*S, B*S, B*S);
+  const segs = []; for (let i = 0; i < N; i++) segs.push([i, (X[3*i+2] + X[3*i+5]) / 2]); segs.sort((p, q) => p[1] - q[1]);
+  for (const [i, z] of segs){ const sh = .55 + .45 * (z / B + .5);
+    const x0 = W/2 + X[3*i]*S, y0 = H/2 - X[3*i+1]*S, x1 = W/2 + X[3*i+3]*S, y1 = H/2 - X[3*i+4]*S;
+    g.lineCap = 'round'; g.strokeStyle = `rgb(${30*sh|0},${28*sh|0},${26*sh|0})`; g.lineWidth = 2*RAD*S + 3*dpr; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+    g.strokeStyle = `rgb(${235*sh|0},${232*sh|0},${225*sh|0})`; g.lineWidth = 2*RAD*S; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke(); }
+}
+const log = document.getElementById('log'); const hist = [];
+let frames = 0; const runFor = +(Q.get('secs') || 12);
+function loop(){ if (!TEST && time < runFor){ step(); frames++; if (frames % 30 === 0){ const k = classify(); hist.push([time.toFixed(1), k.det]); log.textContent = 't=' + time.toFixed(1) + 's  det=' + k.det + '  ' + (NAMES[k.det] || '?') + '  maxPenetration=' + (maxPen*100).toFixed(0) + '%'; } } draw(); requestAnimationFrame(loop); }
+loop();
+window.__result = () => ({ time: +time.toFixed(2), hist, final: classify(), maxPenetration: +maxPen.toFixed(3) });
+</script></body></html>

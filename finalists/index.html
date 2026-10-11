@@ -1,0 +1,262 @@
+<title>Greater Shortlist</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~66ch) with stills allowed wider; a summary table up top; one section per finalist, ranked. */
+:root{
+  --paper:#f1f1ee; --ink:#18191b; --muted:#5b5f63; --rule:#d5d6d1; --panel:#e7e8e4;
+  --accent:#36597f; --good:#2f6b4a; --warn:#8a5a1f;
+  --display:"Newsreader", "Iowan Old Style", Georgia, serif;
+  --body:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --paper:#131415; --ink:#e8e7e3; --muted:#a3a6a9; --rule:#2c2e31; --panel:#1b1d1f;
+  --accent:#93b4d8; --good:#7fc39b; --warn:#d9a866; color-scheme:dark; } }
+:root[data-theme="dark"]{
+  --paper:#131415; --ink:#e8e7e3; --muted:#a3a6a9; --rule:#2c2e31; --panel:#1b1d1f;
+  --accent:#93b4d8; --good:#7fc39b; --warn:#d9a866; color-scheme:dark; }
+
+body{ background:var(--paper); color:var(--ink); font:16px/1.6 var(--body); }
+.wrap{ max-width:1080px; margin:0 auto; padding-inline:clamp(16px,4vw,40px); padding-block:48px 96px; }
+.col{ max-width:44rem; }
+h1,h2,h3{ font-family:var(--display); font-weight:500; text-wrap:balance; line-height:1.15; margin:0; }
+h1{ font-size:clamp(2.2rem,5vw,3.4rem); letter-spacing:-.01em; }
+h2{ font-size:clamp(1.7rem,3.4vw,2.4rem); }
+h3{ font-family:var(--body); font-size:.78rem; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:0 0 .35rem; }
+p{ margin:0; }
+.stack{ display:grid; gap:1rem; }
+.lede{ font-family:var(--display); font-size:1.3rem; line-height:1.45; }
+.small{ font-size:.9rem; color:var(--muted); }
+a{ color:var(--accent); text-underline-offset:2px; }
+a:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:2px; }
+.mono{ font-family:var(--mono); font-variant-numeric:tabular-nums; }
+
+header.top{ display:grid; gap:1.25rem; padding-bottom:2.5rem; border-bottom:1px solid var(--rule); }
+.eyebrow{ font:500 .8rem/1 var(--mono); letter-spacing:.06em; color:var(--muted); text-transform:uppercase; }
+
+.pick{ display:grid; gap:.6rem; padding:1.25rem 1.4rem; background:var(--panel); border-left:3px solid var(--accent); }
+.pick strong{ font-weight:600; }
+
+.tablewrap{ overflow-x:auto; margin-top:2.5rem; }
+table{ border-collapse:collapse; width:100%; min-width:640px; font-size:.95rem; }
+th,td{ text-align:left; vertical-align:top; padding:.7rem .8rem .7rem 0; border-bottom:1px solid var(--rule); }
+th{ font:600 .75rem/1.2 var(--body); letter-spacing:.07em; text-transform:uppercase; color:var(--muted); }
+td.num{ font-family:var(--mono); white-space:nowrap; }
+.dots{ letter-spacing:.15em; }
+.odds{ font-family:var(--mono); font-weight:500; }
+
+section.finalist{ display:grid; gap:1.6rem; padding-block:3.5rem 1rem; border-top:1px solid var(--rule); margin-top:3rem; }
+.fhead{ display:grid; gap:.5rem; }
+.rank{ font:500 .85rem/1 var(--mono); color:var(--accent); letter-spacing:.04em; }
+.pitch{ font-family:var(--display); font-size:1.22rem; line-height:1.5; max-width:44rem; }
+.stills{ display:grid; grid-template-columns:minmax(0,3fr) minmax(0,1fr); gap:12px; align-items:start; }
+.stills.one{ grid-template-columns:minmax(0,1fr); }
+figure{ margin:0; display:grid; gap:.45rem; }
+figure img{ display:block; width:100%; height:auto; max-width:100%; background:#000; }
+figcaption{ font-size:.85rem; color:var(--muted); line-height:1.45; }
+.grid2{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1.4rem 2.2rem; }
+.grid2 > div{ min-width:0; display:grid; gap:.35rem; align-content:start; }
+.verdict{ display:grid; gap:.4rem; padding:1rem 1.2rem; border:1px solid var(--rule); }
+.tag{ display:inline-block; font:500 .72rem/1 var(--mono); letter-spacing:.05em; text-transform:uppercase; padding:.32rem .5rem; border:1px solid currentColor; }
+.tag.ok{ color:var(--good); } .tag.mid{ color:var(--warn); } .tag.bad{ color:var(--muted); }
+ul.tight{ margin:0; padding-left:1.1rem; display:grid; gap:.3rem; }
+
+.why{ display:grid; gap:1rem; margin-top:3.5rem; padding-top:2.5rem; border-top:1px solid var(--rule); }
+ol.reasons{ margin:0; padding-left:1.3rem; display:grid; gap:.55rem; max-width:44rem; }
+footer{ margin-top:3.5rem; padding-top:1.5rem; border-top:1px solid var(--rule); display:grid; gap:.6rem; max-width:44rem; }
+
+@media (max-width:760px){
+  .stills{ grid-template-columns:minmax(0,1fr); }
+  .stills figure.phone{ max-width:260px; }
+  .grid2{ grid-template-columns:minmax(0,1fr); }
+}
+@media (prefers-reduced-motion:reduce){ *{ scroll-behavior:auto; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">Stage 1 · ideas · 1 October 2026</div>
+    <h1>Four finalists, one recommendation</h1>
+    <div class="col stack">
+      <p class="lede">36 concepts went through four prior-art researchers and five independent critics. Four survived to a 30-minute sensory spike each. None of the spikes looks extraordinary yet. One concept is clearly the strongest.</p>
+      <div class="pick">
+        <p><strong>My pick: As Hangs.</strong> Pull a chain down and a stone building rises in the mirror above it; push it up and the stone falls. It is the only concept all five critics kept. The verb is the physics itself, so there is nothing to caption.</p>
+        <p class="small">Honest caveat: its spike proves the composition reads in one glance, but the stone still looks like a clean 3D render, not a photograph. Making one arch read as real stone in raking light is the first job of stage 2, before any mechanics.</p>
+      </div>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Finalist</th><th>The verb</th><th>Critics who kept it</th><th>Spike verdict</th><th>Odds it ends up great</th></tr></thead>
+        <tbody>
+          <tr><td><a href="#as-hangs">As Hangs</a></td><td>Pull down, it stands up</td><td class="num"><span class="dots">●●●●●</span> 5 of 5</td><td>Composition works; stone not yet photographic</td><td class="odds">about 1 in 3</td></tr>
+          <tr><td><a href="#still-warm">Still Warm</a></td><td>Touch, and your heat fades with theirs</td><td class="num"><span class="dots">●●●○○</span> 3 of 5</td><td>Looks like real thermal footage; not beautiful</td><td class="odds">about 1 in 5</td></tr>
+          <tr><td><a href="#linotype">Linotype</a></td><td>Type, and your words become metal</td><td class="num"><span class="dots">●●●○○</span> 3 of 5</td><td>Failed: brass reads as yellow plastic</td><td class="odds">about 1 in 7</td></tr>
+          <tr><td><a href="#tangle">Tangle</a></td><td>Shake, and physics ties a knot</td><td class="num"><span class="dots">●●○○○</span> 2 of 5</td><td>Knot detector works; the cord tied no knots</td><td class="odds">about 1 in 10</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </header>
+
+  <!-- ===================== AS HANGS ===================== -->
+  <section class="finalist" id="as-hangs">
+    <div class="fhead">
+      <div class="rank">1 · recommended</div>
+      <h2>As Hangs</h2>
+      <p class="pitch">A horizon splits the screen: below, an iron chain hangs under a workshop lamp; above, the same curve stands upside down as a stone arch in late sun. Pull the chain down and a spire rises where you pulled; hang chains from chains and a vaulted building grows; push the chain up and the stone above cracks and falls.</p>
+    </div>
+    <div class="stills">
+      <figure>
+        <img src="img/as-hangs-desk.jpg" alt="Split image: a pale stone arch with a spire on a plain under a blue evening sky above; below, an iron chain hanging between two hooks in a warm lamp-lit room, with a small sack weighting it where the spire stands above." width="1440" height="900" loading="lazy">
+        <figcaption>Spike, laptop (1440×900). The chain's shape comes from a real physics relaxation with one weighted sack. The stone above is that curve inverted, so the spire sits exactly over the sack.</figcaption>
+      </figure>
+      <figure class="phone">
+        <img src="img/as-hangs-phone.jpg" alt="Portrait close-up: stone voussoirs of the arch and the base of the spire above; below, iron chain links and a burlap sack against a warm plaster wall." width="780" height="1688" loading="lazy">
+        <figcaption>Phone (390×844). Portrait stacks the two worlds: the thumb works below and the result appears above it, never under it.</figcaption>
+      </figure>
+    </div>
+    <div class="verdict">
+      <div><span class="tag mid">Spike: competent, not yet stunning</span></div>
+      <p>Judged against the Shadertoy front page and Stålberg: the chain reads as real iron and the mirror reads instantly, but the stone is clean and uniform and the sky is a gradient. It looks like a good hobbyist render. The parts needed to make stone read as stone are known: a bare limestone plain, haze, a richer sky, chipped and varied blocks, and soft bounce light. They are a few days of craft, not a research problem.</p>
+    </div>
+    <div class="grid2">
+      <div><h3>First 10 seconds</h3><p>Before you touch it, the piece performs its own verb once: a small sack drops onto the chain, the chain kinks, and above it a spire heaves up out of the arch and settles with a puff of dust. You pull the chain with your thumb; above, the stone waits as bare timber centering; let go and the chain swings and settles, and the stones drop into place one by one, each with a knock. Muted, the rising spire and the falling stone carry it.</p></div>
+      <div><h3>The verb</h3><p>Pull down, and it stands up. Robert Hooke, 1675: <em>"As hangs the flexible line, so but inverted will stand the rigid arch."</em> A hanging chain is in pure tension; flipped, the same curve is in pure compression. Pushing the chain up makes a shape stone cannot hold, so it falls. Stone stands only where a chain would hang.</p></div>
+      <div><h3>New? Honest closest prior art</h3>
+        <ul class="tight">
+          <li>Gaudí's own hanging model over a mirror, on display in Barcelona (<a href="https://lapedreracasamila.com/casa-mila-espai-gaudi-attic-museum/">La Pedrera attic</a>): the image, static.</li>
+          <li><a href="https://www.axelkilian.com/projectpages/cadenary.html">CADenary</a>, Axel Kilian, MIT, 2002: a hanging-string design tool.</li>
+          <li><a href="https://blog.vive.com/us/gaudi-the-atelier-of-the-divine-vr-syncs-with-lothlorien/">Gaudí, the Atelier of the Divine</a> (VR, 2023): ropes and a floor mirror you watch.</li>
+          <li>An unbuilt 2D "hang it, flip it" idea filed publicly on 28 September (<a href="https://github.com/eyal-weiss/wonderlattice/issues/61">wonderlattice #61</a>).</li>
+        </ul>
+        <p class="small">Not found: two live worlds coupled in real time, stone that falls when the chain lies, and a vault you can walk into.</p>
+      </div>
+      <div><h3>After minute one</h3><p>Chains hung from chains become vaults and Gaudí's branching tree-columns; weights become towers; the sun moves across the stone. Push up anywhere and watch the building fail, then rebuild. Finally step up through the horizon and stand inside what you made, hearing its echo computed from its real volume.</p></div>
+      <div><h3>Biggest risk</h3><p>That it reads as a form-finding demo with a mirror shader: a beautiful remake rather than a thing nobody has seen. Close behind: building chain nets in 3D with one thumb, and stone that looks rendered rather than real.</p></div>
+      <div><h3>Odds it ends up great, not good</h3><p><span class="odds">About 1 in 3.</span> The idea and verb are the best of the 36; the outcome depends on whether the stone, light, iron and sound reach photographic quality.</p></div>
+    </div>
+  </section>
+
+  <!-- ===================== STILL WARM ===================== -->
+  <section class="finalist" id="still-warm">
+    <div class="fhead">
+      <div class="rank">2</div>
+      <h2>Still Warm</h2>
+      <p class="pitch">A thermal camera in a kitchen someone has just left: a chair back still glowing, a steaming mug, footprints warming toward a door left ajar. Everything they touched is fading on a real cooling clock, and when you touch the screen your own warm fingerprint appears and fades at the same rate as theirs.</p>
+    </div>
+    <div class="stills">
+      <figure>
+        <img src="img/still-warm-desk.jpg" alt="False-colour thermal image of a kitchen in purples and oranges: a black cold window, a white-hot radiator and mug, a glowing chair back, a warm handprint by the door frame, and warm footprints on the floor." width="1440" height="900" loading="lazy">
+        <figcaption>Spike, laptop. Temperatures are computed per surface (cold corners, the plume above the radiator, the window opaque and cold as glass is in infrared), then shown through a camera's colour palette and sensor noise.</figcaption>
+      </figure>
+      <figure class="phone">
+        <img src="img/still-warm-phone.jpg" alt="Portrait thermal image: a table with a white-hot mug, warm footprints across the floor, a warm door handle on the left." width="780" height="1688" loading="lazy">
+        <figcaption>Phone.</figcaption>
+      </figure>
+    </div>
+    <div class="verdict">
+      <div><span class="tag mid">Spike: convincing, not beautiful</span></div>
+      <p>It looks like real thermal footage after 25 minutes, because a thermal image really is a smooth temperature field, which is what the code computes. But thermal images are flat and blocky by nature, so the ceiling for beauty is low. The moment that would make it work (your own print glowing and fading beside theirs) can't be shown in a still.</p>
+    </div>
+    <div class="grid2">
+      <div><h3>First 10 seconds</h3><p>A cold purple room with warm traces: the mug, the chair, footprints getting warmer toward a door that is still swinging shut, its handle white-hot. Your touch leaves a warm print that starts fading at once. Dragging follows the footprints. Fully readable muted.</p></div>
+      <div><h3>The verb</h3><p>Touch, and look. Looking is a race against cooling, and touching makes you part of the evidence.</p></div>
+      <div><h3>New? Honest closest prior art</h3>
+        <ul class="tight">
+          <li><a href="https://adventuregamehotspot.com/game/694/home-detective">Home Detective</a> (Quest, 2023): a "residual heat scanner" that shows where criminals moved.</li>
+          <li><a href="https://www.marcopinter.com/Thermal.html">Thermal Gestures</a>, Marco Pinter (2016): touch a wall and your heat print is projected back, fading.</li>
+          <li>Cyberpunk 2077's thermal clue layer.</li>
+        </ul>
+        <p class="small">Not found: a wordless story told only in heat that disappears while you read it.</p>
+      </div>
+      <div><h3>After minute one</h3><p>A whole house cooling in real time. Put the last hour in order from temperature alone (a 45 °C mug was poured about twenty minutes ago); find your own warm reflection in the cold window glass; watch the last trace go out.</p></div>
+      <div><h3>Biggest risk</h3><p>Its substance is writing and level design, not computation, which is how Ovation went wrong. Over a ten-minute visit, Newton cooling is hard to tell apart from a simple fade.</p></div>
+      <div><h3>Odds it ends up great, not good</h3><p><span class="odds">About 1 in 5.</span> The strongest unease in the set within two seconds; the depth depends on a story I would have to write well.</p></div>
+    </div>
+  </section>
+
+  <!-- ===================== LINOTYPE ===================== -->
+  <section class="finalist" id="linotype">
+    <div class="fhead">
+      <div class="rank">3</div>
+      <h2>Linotype</h2>
+      <p class="pitch">Type a line and a hot-metal Linotype machine assembles your words from falling brass matrices, wedges them tight with steel spacebands and casts them as a warm, mirror-reversed slug of lead. There is no backspace; then the machine takes your sentence apart and sorts every matrix home by the teeth on its head.</p>
+    </div>
+    <div class="stills one">
+      <figure>
+        <img src="img/linotype.jpg" alt="Brass Linotype-style matrices fanned out on a grey surface, with lugs at top and bottom and stepped notches at the top; small letters faintly visible on their edges; one plain pale plate stands among them." width="1440" height="900" loading="lazy">
+        <figcaption>Spike, laptop: a word's matrices fanned so their key-like faces show. The letters come from real glyph outlines punched into the edges.</figcaption>
+      </figure>
+    </div>
+    <div class="verdict">
+      <div><span class="tag bad">Spike: failed</span></div>
+      <p>The plates read as matrices, but the brass looks like yellow plastic, the letters are too small to be the hero, and the steel spaceband looks like card. This confirms the feasibility critic: this object's identity is precise machinery, and modelling it in code risks a CAD animation.</p>
+    </div>
+    <div class="grid2">
+      <div><h3>First 10 seconds</h3><p>Macro on brass matrices clattering into the assembler, the lead pot glowing. Each key you press releases a matrix that falls with its own travel time, so typing too fast lands letters transposed. On a phone, you type on the machine's own 90-key keyboard instead of the phone's.</p></div>
+      <div><h3>The verb</h3><p>Type, and every keystroke commits metal. A mistake means running a finger down the first two key columns ("etaoin shrdlu"), casting the line anyway and throwing it in the hellbox.</p></div>
+      <div><h3>New? Honest closest prior art</h3>
+        <ul class="tight">
+          <li>Nothing interactive found in 23 searches.</li>
+          <li>Nearest: <a href="https://makezine.com/article/craft/lettermpress_a_virtual_letterp/">LetterMpress</a> (2011, a virtual hand-set letterpress).</li>
+          <li><cite>Linotype: The Film</cite> (2012).</li>
+          <li><cite>Farewell, Etaoin Shrdlu</cite>, the New York Times' last hot-metal night (1978).</li>
+        </ul>
+      </div>
+      <div><h3>After minute one</h3><p>The full cycle (assemble, justify, cast, distribute), the machine's own failures (transposed letters, a squirt of lead from a loose line), and the slug you keep or remelt.</p></div>
+      <div><h3>Biggest risk</h3><p>The modelling load. A machine with hundreds of visible parts tends to look like a CAD animation, and the slug's arrival risks becoming an exhibit you watch rather than a thing you make.</p></div>
+      <div><h3>Odds it ends up great, not good</h3><p><span class="odds">About 1 in 7.</span> The cleanest novelty in the set, with a spike that showed the look is the hard part.</p></div>
+    </div>
+  </section>
+
+  <!-- ===================== TANGLE ===================== -->
+  <section class="finalist" id="tangle">
+    <div class="fhead">
+      <div class="rank">4</div>
+      <h2>Tangle</h2>
+      <p class="pitch">Shake a charging cable in a box for a few seconds and physics ties it in a knot; pull the ends and the page names it: trefoil, figure-eight, 5₂, or, half the time, nothing at all. On a phone the phone is the box, and a pocket mode tells you which knot your walk tied.</p>
+    </div>
+    <div class="stills one">
+      <figure>
+        <img src="img/tangle.jpg" alt="A diagnostic view of a white cord inside a square box outline on a dark background, with a status line reading the knot type." width="1440" height="900" loading="lazy">
+        <figcaption>Spike, laptop: a diagnostic physics view, not a render. A 1.8 m cord tumbles in a 13 cm box that rotates once a second, as in the 2007 experiment that measured how cords knot.</figcaption>
+      </figure>
+    </div>
+    <div class="verdict">
+      <div><span class="tag mid">Spike: half</span></div>
+      <p>The knot identification is right: it computes a knot invariant from the cord's crossings and returns 1 for no knot, 3 for a trefoil and 5 for a figure-eight on test shapes. After tuning, it never overlapped itself by more than a third of its thickness. But it tied no knot in 14 simulated seconds across three runs, and the image is a cord in a box.</p>
+    </div>
+    <div class="grid2">
+      <div><h3>First 10 seconds</h3><p>A white cable loose in a wooden box. Drag (or shake the phone) and it tumbles; when it settles, the ends draw apart and a clean knot cinches out of the mess, with its name beneath it.</p></div>
+      <div><h3>The verb</h3><p>Shake. The universe's tendency to tangle is the joke, and the knot's name is the punchline.</p></div>
+      <div><h3>New? Honest closest prior art</h3>
+        <ul class="tight">
+          <li>Raymer and Smith, "Spontaneous knotting of an agitated string" (PNAS 2007, Ig Nobel 2008).</li>
+          <li>KnotPlot and KnotFolio for knot viewing and identification.</li>
+          <li>Rope physics toys are everywhere.</li>
+        </ul>
+        <p class="small">Not checked by search (the budget had run out), so treat novelty as unverified.</p>
+      </div>
+      <div><h3>After minute one</h3><p>Every shake gives a new knot to collect; longer cables knot more often, as the paper found; pocket mode turns an ordinary walk into a knot.</p></div>
+      <div><h3>Biggest risk</h3><p>Physics honesty: if the cord ever passes through itself, the named knot is a lie. Close behind, the payoff is a word on a cord in a box.</p></div>
+      <div><h3>Odds it ends up great, not good</h3><p><span class="odds">About 1 in 10.</span> The funniest idea here, with the weakest image and an unproven core.</p></div>
+    </div>
+  </section>
+
+  <section class="why">
+    <h2>Why As Hangs</h2>
+    <ol class="reasons">
+      <li><strong>It survived every lens.</strong> Prior art, a jaded technologist, a stranger on a muted phone, feasibility, and a critic primed with the "very average" verdict all kept it. Nothing else got more than three.</li>
+      <li><strong>The verb is the idea.</strong> Pulling down to make something stand up is Hooke's theorem performed by your thumb. Push the other way and the stone falls, so the physics bites and needs no caption.</li>
+      <li><strong>The simulation is small and exact.</strong> A hanging chain has nowhere for the work to hide, so the effort has to go into what a person actually sees and hears: stone in raking light, iron under a lamp, the clink of links, the knock of a block settling, the echo of a vault.</li>
+      <li><strong>It has somewhere to go.</strong> From one arch to vaults and towers, from building to failure and back, and finally inside the stone, which gives depth after the first minute without adding a second idea.</li>
+    </ol>
+    <p class="col small">If you would rather have unease than wonder, Still Warm is the alternative, with the risk that its depth is a writing job. I would not start with Linotype or Tangle on current evidence.</p>
+  </section>
+
+  <footer class="small">
+    <p><strong>How these were chosen.</strong> Both earlier attempts were reviewed first. 36 concepts were written across art, games, tools, music, language, simulation, data, story and humour. Four research agents spent the session's 200 web searches checking prior art, so some later concepts have unverified verdicts. Five critics then judged all 36, each with one lens and told to default to KILL. The three with the most keeps, plus Tangle (two keeps, and the strongest funny idea, so the shortlist wasn't all art), each got a sensory spike of about 30 minutes, screenshotted at laptop and phone sizes.</p>
+    <p>Six concepts died on prior art alone; one had been built almost exactly six weeks earlier. All working notes, critic reports and spike code are in the project folder under <span class="mono">process/</span> and <span class="mono">spikes/</span>.</p>
+  </footer>
+</div>

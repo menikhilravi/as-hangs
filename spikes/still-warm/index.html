@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Still Warm — spike</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;touch-action:none;overscroll-behavior:none}
+  canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;image-rendering:auto}
+  .hud{position:fixed;inset:0;pointer-events:none;font:500 13px/1.2 ui-monospace,Menlo,monospace;color:#fff;
+       text-shadow:0 0 2px #000,0 0 1px #000;letter-spacing:.02em}
+  .cross{position:absolute;left:50%;top:50%;width:34px;height:34px;transform:translate(-50%,-50%)}
+  .cross:before,.cross:after{content:"";position:absolute;background:#fff;box-shadow:0 0 1px #000}
+  .cross:before{left:16px;top:0;width:2px;height:34px}.cross:after{top:16px;left:0;height:2px;width:34px}
+  .spot{position:absolute;left:calc(50% + 22px);top:calc(50% - 26px);font-size:15px}
+  .tl{position:absolute;left:14px;top:12px}
+  .bar{position:absolute;right:14px;top:50%;transform:translateY(-50%);width:10px;height:46vh;border:1px solid rgba(255,255,255,.7)}
+  .bl{position:absolute;right:30px;font-size:12px}
+</style></head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud">
+  <div class="cross"></div><div class="spot" id="spot">--.- °C</div>
+  <div class="tl" id="tl"></div>
+  <div class="bar" id="bar"></div>
+  <div class="bl" id="bmax" style="top:calc(27vh - 18px)"></div><div class="bl" id="bmin" style="top:calc(73vh + 6px)"></div>
+</div>
+<script src="../lib/glkit.js"></script>
+<script>
+const Q = new URLSearchParams(location.search);
+const c = document.getElementById('c');
+const dpr = Math.min(devicePixelRatio || 1, 2);
+c.width = innerWidth * dpr; c.height = innerHeight * dpr;
+const portrait = innerHeight > innerWidth;
+// microbolometer-ish sensor: render temperatures at low resolution, upscale in display pass
+const SW = portrait ? 240 : 480, SH = Math.round(SW * innerHeight / innerWidth);
+const gl = GLK.init(c);
+const temp = GLK.target(gl, SW, SH, { float: true, linear: true });
+const TMIN = 14, TMAX = 36;
+const EQ = Q.has('eq') ? +Q.get('eq') : 0.75;
+
+const scene = GLK.program(gl, GLK.common + `
+uniform vec3 camPos; uniform vec3 camTgt; uniform float fov; uniform float T0;
+mat2 rot(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+float sdBox(vec3 p, vec3 b){ vec3 q = abs(p) - b; return length(max(q, 0.)) + min(max(q.x, max(q.y, q.z)), 0.); }
+float sdRBox(vec3 p, vec3 b, float r){ return sdBox(p, b - r) - r; }
+float sdCylY(vec3 p, float h, float r){ vec2 d = abs(vec2(length(p.xz), p.y)) - vec2(r, h); return min(max(d.x, d.y), 0.) + length(max(d, 0.)); }
+float sdCaps(vec3 p, vec3 a, vec3 b, float r){ vec3 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0., 1.); return length(pa - ba * h) - r; }
+float sdTorusZ(vec3 p, float R, float r){ vec2 q = vec2(length(p.xy) - R, p.z); return length(q) - r; }
+
+// ---- architecture: free space = room ∪ hallway ∪ doorway ∪ window recess; solid = complement
+const vec3 RC = vec3(0., 1.25, -.5), RH = vec3(2., 1.25, 3.);       // room x[-2,2] y[0,2.5] z[-3.5,2.5]
+const vec3 HC = vec3(3.3, 1.2, 1.4), HH = vec3(1.3, 1.2, 1.1);       // hallway beyond right wall
+const vec3 DC = vec3(2., 1.025, 1.52), DH = vec3(.12, 1.025, .42);   // doorway z[1.1,1.94]
+const vec3 WC = vec3(-.2, 1.55, 2.5), WH = vec3(.7, .52, .12);       // window recess
+const vec3 HINGE = vec3(1.97, 0., 1.94);
+const float DOORA = .55;                                              // door ajar (rad, into the room)
+
+vec2 map(vec3 p){
+  float free = min(min(sdBox(p - RC, RH), sdBox(p - HC, HH)), min(sdBox(p - DC, DH), sdBox(p - WC, WH)));
+  vec2 r = vec2(-free, 1.);
+  // table
+  float d = sdBox(p - vec3(0., .74, .6), vec3(.72, .022, .46));
+  for (int i = 0; i < 4; i++){ vec2 s = vec2(i & 1, i >> 1) * 2. - 1.; d = min(d, sdBox(p - vec3(s.x * .64, .36, .6 + s.y * .38), vec3(.03, .36, .03))); }
+  if (d < r.x) r = vec2(d, 4.);
+  // chair A: pushed back, turned
+  { vec3 q = p - vec3(-.32, 0., -.28); q.xz = rot(-.42) * q.xz;
+    float c = sdRBox(q - vec3(0., .45, 0.), vec3(.21, .025, .21), .01);
+    c = min(c, sdRBox(q - vec3(0., .78, -.2), vec3(.21, .3, .018), .01));
+    for (int i = 0; i < 4; i++){ vec2 s = vec2(i & 1, i >> 1) * 2. - 1.; c = min(c, sdBox(q - vec3(s.x * .18, .22, s.y * .18), vec3(.017, .22, .017))); }
+    if (c < r.x) r = vec2(c, 5.); }
+  // chair B: tucked in, far side
+  { vec3 q = p - vec3(.22, 0., 1.22); q.xz = rot(3.14159) * q.xz;
+    float c = sdRBox(q - vec3(0., .45, 0.), vec3(.21, .025, .21), .01);
+    c = min(c, sdRBox(q - vec3(0., .78, -.2), vec3(.21, .3, .018), .01));
+    for (int i = 0; i < 4; i++){ vec2 s = vec2(i & 1, i >> 1) * 2. - 1.; c = min(c, sdBox(q - vec3(s.x * .18, .22, s.y * .18), vec3(.017, .22, .017))); }
+    if (c < r.x) r = vec2(c, 6.); }
+  // mugs
+  { vec3 q = p - vec3(.30, .812, .40);
+    float m = max(sdCylY(q, .05, .043), -sdCylY(q - vec3(0., .012, 0.), .05, .037));
+    m = min(m, sdTorusZ(q - vec3(.05, 0., 0.), .024, .0065));
+    if (m < r.x) r = vec2(m, 7.); }
+  { vec3 q = p - vec3(-.14, .812, .86);
+    float m = max(sdCylY(q, .05, .043), -sdCylY(q - vec3(0., .012, 0.), .05, .037));
+    m = min(m, sdTorusZ(q - vec3(-.05, 0., 0.), .024, .0065));
+    if (m < r.x) r = vec2(m, 8.); }
+  // counter + top
+  { float k = sdBox(p - vec3(-1.71, .44, .25), vec3(.3, .44, 1.3));
+    k = min(k, sdBox(p - vec3(-1.69, .9, .25), vec3(.32, .02, 1.32)));
+    if (k < r.x) r = vec2(k, 9.); }
+  // kettle
+  { vec3 q = p - vec3(-1.66, 1.03, .85);
+    float k = sdCylY(q, .1, .085) - .025;
+    k = min(k, sdCaps(p, vec3(-1.58, 1.0, .85), vec3(-1.48, 1.11, .85), .016));
+    k = min(k, sdTorusZ((q - vec3(-.11, .03, 0.)).xyz, .075, .012));
+    if (k < r.x) r = vec2(k, 10.); }
+  // fridge
+  { float f = sdRBox(p - vec3(-1.69, .93, 2.1), vec3(.31, .93, .33), .025);
+    if (f < r.x) r = vec2(f, 11.); }
+  // door (ajar into the room) + handle
+  { vec3 q = p - HINGE; q.xz = rot(-DOORA) * q.xz;
+    float dd = sdBox(q - vec3(-.02, 1.02, -.42), vec3(.02, 1.02, .42));
+    if (dd < r.x) r = vec2(dd, 12.);
+    float h = sdCaps(q, vec3(-.06, 1.0, -.77), vec3(-.13, 1.0, -.77), .011);
+    h = min(h, sdCylY((q - vec3(-.045, 1.0, -.77)).yxz, .02, .022));
+    if (h < r.x) r = vec2(h, 13.); }
+  // radiator under window
+  { float rr = sdRBox(p - vec3(-.2, .45, 2.43), vec3(.68, .29, .045), .015);
+    if (rr < r.x) r = vec2(rr, 14.); }
+  // pendant lamp: cord, shade, bulb
+  { float l = sdCylY(p - vec3(0., 2.32, .6), .18, .006);
+    vec3 q = p - vec3(0., 2.07, .6);
+    float sh = max(length(q.xz) - (.07 + (.07 - q.y) * 1.1), abs(q.y) - .07);
+    sh = max(sh, -(length(q.xz) - (.062 + (.07 - q.y) * 1.1)));
+    l = min(l, sh);
+    if (l < r.x) r = vec2(l, 15.);
+    float b = length(p - vec3(0., 1.99, .6)) - .045;
+    if (b < r.x) r = vec2(b, 16.); }
+  // light switch
+  { float s = sdRBox(p - vec3(1.995, 1.22, .86), vec3(.012, .055, .045), .006); if (s < r.x) r = vec2(s, 17.); }
+  return r;
+}
+vec3 nrm(vec3 p){ vec2 e = vec2(.0015, 0.); return normalize(vec3(map(p + e.xyy).x - map(p - e.xyy).x, map(p + e.yxy).x - map(p - e.yxy).x, map(p + e.yyx).x - map(p - e.yyx).x)); }
+
+vec2 march(vec3 ro, vec3 rd){ float t = .02; for (int i = 0; i < 220; i++){ vec2 h = map(ro + rd * t); if (h.x < .0006 * t) return vec2(t, h.y); t += h.x * .9; if (t > 14.) break; } return vec2(-1., 0.); }
+
+// ---- footprint shape in floor-local coords (x: across, y: along heading), metres
+float foot(vec2 q, float side){
+  q.x *= side;
+  float heel = length((q - vec2(0., -.07)) / vec2(.032, .04)) - 1.;
+  float ball = length((q - vec2(.006, .055)) / vec2(.042, .05)) - 1.;
+  float arch = length((q - vec2(.02, -.005)) / vec2(.022, .06)) - 1.;
+  float f = min(min(heel, ball), arch);
+  for (int i = 0; i < 5; i++){ float fi = float(i); vec2 tc = vec2(-.03 + fi * .016, .115 - fi * fi * .0025 - fi * .002); f = min(f, length((q - tc) / vec2(.0085 + (fi < .5 ? .004 : 0.), .011)) - 1.); }
+  return 1. - smoothstep(-.3, .25, f);
+}
+// path from chair A to the door: quadratic bezier on the floor (x,z)
+vec2 bez(float t){ vec2 a = vec2(-.55, -.1), b = vec2(.95, .15), c2 = vec2(2.55, 1.45); return mix(mix(a, b, t), mix(b, c2, t), t); }
+float prints(vec2 xz){
+  float s = 0.;
+  for (int i = 0; i < 11; i++){
+    float t = (float(i) + .5) / 11.;
+    vec2 p0 = bez(t), tg = normalize(bez(t + .01) - bez(t - .01));
+    vec2 nn = vec2(-tg.y, tg.x);
+    float side = (i % 2 == 0) ? 1. : -1.;
+    vec2 c = p0 + nn * .09 * side;
+    vec2 q = vec2(dot(xz - c, nn), dot(xz - c, tg));
+    float age = (1. - t) * 75.;                 // seconds since that step (older near the chair)
+    float heat = 5.5 * exp(-age / 55.);         // °C above floor, Newton-ish decay
+    s += foot(q * 1.0, side) * heat;
+  }
+  return s;
+}
+float hand(vec2 q){ // palm + four fingers + thumb, metres, fingers toward +y
+  float f = length(q / vec2(.045, .05)) - 1.;
+  for (int i = 0; i < 4; i++){ float fi = float(i); vec2 a = vec2(-.03 + fi * .02, .04), b = a + vec2((fi - 1.5) * .006, .055 - abs(fi - 1.2) * .01);
+    vec2 pa = q - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0., 1.); f = min(f, length(pa - ba * h) / .0095 - 1.); }
+  { vec2 a = vec2(.04, -.005), b = vec2(.075, .035); vec2 pa = q - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0., 1.); f = min(f, length(pa - ba * h) / .011 - 1.); }
+  return 1. - smoothstep(-.2, .3, f);
+}
+
+float tempAt(vec3 p, vec3 n, float id){
+  float T = 19.4;
+  if (id == 1.){ // architecture
+    bool hall = p.x > 2.01;
+    if (p.y < .004){ // floor
+      T = hall ? 16.8 : 18.4 - .8 * smoothstep(1.2, 2.5, p.z);
+      T += prints(p.xz);
+      // warm patch where feet rested under the table, older
+      T += 2.2 * exp(-pow(length((p.xz - vec2(-.2, .2)) / vec2(.22, .14)), 2.));
+      if (hall) T += 3.5 * foot(vec2(p.z - 1.2, p.x - 2.75) , -1.) + 3. * foot(vec2(p.z - 1.38, p.x - 3.15), 1.);
+    } else if (p.y > (hall ? 2.395 : 2.495)){ // ceiling
+      T = hall ? 17.6 : 21.1;
+      T += 9. * exp(-dot(p.xz - vec2(0., .6), p.xz - vec2(0., .6)) / .05);
+    } else if (abs(p.z - 2.62) < .01 && abs(p.x + .2) < .7 && abs(p.y - 1.55) < .52){ // window glass (handled as -1 below)
+      T = -100.;
+    } else {
+      T = (hall ? 17. : 19.2) + 1.3 * smoothstep(.2, 2.5, p.y);
+      // cold corners and edges (thermal bridges)
+      float e = min(min(2. - abs(p.x), min(2.5 - p.z, p.z + 3.5)), min(p.y, 2.5 - p.y) * 1.3);
+      if (!hall) T -= 2.4 * exp(-e / .22);
+      if (p.z > 2.45 && !hall){ T -= 1.6; float wdx = max(abs(p.x + .2) - .7, abs(p.y - 1.55) - .52); T -= 2.2 * exp(-max(wdx, 0.) / .12) * step(0., wdx); }
+      // studs on interior walls
+      float u = abs(n.x) > .5 ? p.z : p.x;
+      T -= .35 * smoothstep(.03, .0, abs(fract(u / .4 + .5) - .5) * .4);
+      // radiator plume on the window wall
+      if (p.z > 2.45) { float ex = (p.x + .2) / .8; T += 7.5 * exp(-ex * ex) * exp(-max(p.y - .74, 0.) / .55) * step(.74, p.y); }
+      // fridge exhaust plume on the wall behind/above it
+      if (p.x < -1.95 || p.z > 2.45) { vec2 q = vec2(p.x < -1.95 ? p.z - 2.1 : p.x + 1.69, p.y - 1.86); T += 5. * exp(-q.x * q.x / .07) * exp(-max(q.y, 0.) / .4) * step(-.1, q.y); }
+      // light switch fingertip smear on the wall
+      if (p.x > 1.98) T += 4. * exp(-dot(p.zy - vec2(.86, 1.27), p.zy - vec2(.86, 1.27)) / .0006);
+      // hallway: faint warm smudge on the wall at shoulder height where a hand steadied
+      if (hall && p.z > 2.49) T += 3.2 * hand(vec2(p.x - 2.9, p.y - 1.35) * vec2(1., 1.));
+    }
+  } else if (id == 4.){ // table
+    T = 19.3;
+    vec2 q = p.xz;
+    if (p.y > .755){
+      // forearm patches facing chair A (table edge at z=.14)
+      T += 4.8 * exp(-pow(length((q - vec2(-.42, .25)) / vec2(.15, .06)), 2.)) + 4.2 * exp(-pow(length((q - vec2(-.05, .23)) / vec2(.13, .06)), 2.));
+      // two handprints at the edge where they pushed themselves up
+      T += 10. * hand((vec2(q.x + .48, q.y - .22) * rot(.25)) / 1.25) + 10. * hand((vec2(q.x - .02, q.y - .22) * rot(-.15)) / 1.25);
+      // warm halo under the hot mug, and a fading ring where it stood before
+      T += 7. * exp(-dot(q - vec2(.30, .40), q - vec2(.30, .40)) / .004);
+      float ring = abs(length(q - vec2(-.25, .32)) - .043); T += 3. * exp(-ring * ring / .00004);
+    } else if (abs(p.z - .14) < .01) {
+      T += 6. * exp(-pow((p.x + .45) / .1, 2.)) * exp(-pow((p.y - .735) / .02, 2.)); // fingers curled under the edge
+    }
+  } else if (id == 5.){ // chair A: someone sat here
+    vec3 q = p - vec3(-.32, 0., -.28); q.xz = rot(-.42) * q.xz;
+    T = 19.4;
+    if (q.y > .47 && q.y < .49) T += 12.5 * exp(-pow(length(q.xz / vec2(.17, .16)), 3.));
+    if (q.z < -.18 && q.y > .5) T += 8.5 * exp(-pow(length(vec2(q.x / .15, (q.y - .8) / .17)), 2.)) * step(q.z, -.2);
+  } else if (id == 6.){ T = 19.; }
+  else if (id == 7.){ vec3 q = p - vec3(.30, .812, .40); T = 51. - 9. * smoothstep(.0, -.05, q.y); if (length(q.xz) < .037 && q.y > .02) T = 58.; if (length(q - vec3(.05,0.,0.)) < .04 && length(q.xz) > .043) T = 41.; }
+  else if (id == 8.){ T = 20.6; }  // the other mug: never touched
+  else if (id == 9.){ T = 19.; if (p.y > .9) T += 9. * exp(-dot(p.xz - vec2(-1.66, .85), p.xz - vec2(-1.66, .85)) / .02); else T -= .6 * smoothstep(.01, .0, abs(fract((p.z + 1.05) / .65) - .5) * .6); }
+  else if (id == 10.){ T = 64. - 18. * smoothstep(1.13, .93, p.y); }
+  else if (id == 11.){ T = 18.4; T += 12. * smoothstep(1.55, 1.86, p.y) * smoothstep(1.9, 2.4, p.z); T -= 2. * step(abs(p.x + 1.38), .02) * smoothstep(1.2, .2, abs(p.y - 1.1)); }
+  else if (id == 12.){ // door
+    vec3 q = p - HINGE; q.xz = rot(-DOORA) * q.xz;
+    T = 18.6 + 1. * smoothstep(.0, 2., q.y);
+    T += 10. * hand(vec2(-q.z - .7, q.y - 1.12) * rot(.1)) * step(q.x, -.03);   // palm that pushed it open
+  }
+  else if (id == 13.){ T = 33.8; }   // handle, just let go of
+  else if (id == 14.){ T = 46.5 + 2.6 * cos(p.x * 70.); if (p.x < -.82) T = 52.; }
+  else if (id == 15.){ T = 46. + 30. * smoothstep(2.12, 2.0, p.y); }
+  else if (id == 16.){ T = 96.; }
+  else if (id == 17.){ T = 19.6 + 6. * exp(-dot(p.zy - vec2(.86, 1.24), p.zy - vec2(.86, 1.24)) / .0004); }
+  return T;
+}
+
+// the camera operator, as a warm body behind the lens (only ever seen in reflections)
+float operatorT(vec3 ro, vec3 rd){
+  vec3 head = camPos + vec3(0., .1, -.16), a = camPos + vec3(0., -.25, -.22), b = camPos + vec3(0., -1.1, -.2);
+  // sphere + capsule intersection by marching (cheap, few steps)
+  float t = 0.;
+  for (int i = 0; i < 60; i++){ vec3 p = ro + rd * t; float d = min(length(p - head) - .11, sdCaps(p, a, b, .2)); if (d < .002) return (length(p - head) < .13 ? 34.2 : 30.5); t += d; if (t > 8.) break; }
+  return -1.;
+}
+
+void main(){
+  vec2 p = (gl_FragCoord.xy - .5 * R) / R.y;
+  vec3 fw = normalize(camTgt - camPos), rt = normalize(cross(fw, vec3(0, 1, 0))), up = cross(rt, fw);
+  vec3 rd = normalize(fw + (p.x * rt + p.y * up) * fov);
+  vec2 h = march(camPos, rd);
+  float T = 19.;
+  vec3 pos = camPos + rd * h.x;
+  if (h.x > 0.){
+    vec3 n = nrm(pos);
+    T = tempAt(pos, n, h.y);
+    if (T < -50.){ // window glass: cold, ε≈.85, reflects the room — and you
+      vec3 rr = reflect(rd, n);
+      float op = operatorT(pos + n * .01, rr);
+      float Tr;
+      if (op > 0.) Tr = op; else { vec2 h2 = march(pos + n * .01, rr); vec3 p2 = pos + n * .01 + rr * h2.x; Tr = h2.x > 0. ? tempAt(p2, nrm(p2), h2.y) : 19.; if (Tr < -50.) Tr = 9.; }
+      float F = .12 + .5 * pow(1. - abs(dot(n, -rd)), 4.);
+      T = mix(8.6, Tr, F);
+    }
+    if (h.y == 13.){ // polished handle: low emissivity, mostly reflection plus its own warmth
+      vec3 rr = reflect(rd, n); vec2 h2 = march(pos + n * .01, rr); vec3 p2 = pos + n * .01 + rr * h2.x;
+      float Tr = h2.x > 0. ? tempAt(p2, nrm(p2), h2.y) : 19.; if (Tr < -50.) Tr = 9.;
+      T = mix(Tr, 33.8, .55);
+    }
+  }
+  // warm air rising off the mug (faint, wavering plume)
+  {
+    vec3 base = vec3(.30, .87, .40);
+    float acc = 0.;
+    for (int i = 0; i < 40; i++){
+      float t = float(i) * .06 + .5; if (h.x > 0. && t > h.x) break;
+      vec3 q = camPos + rd * t - base;
+      if (q.y < 0. || q.y > .9) continue;
+      float w = .02 + q.y * .09;
+      float sway = sin(q.y * 9. - T0 * 2.1) * .02 * q.y + (vnoise(vec2(q.y * 6. - T0 * 1.3, 3.)) - .5) * .05 * q.y;
+      float r2 = dot(q.xz - vec2(sway, 0.), q.xz - vec2(sway, 0.)) / (w * w);
+      acc += exp(-r2) * exp(-q.y * 2.2) * .06;
+    }
+    T += acc * 26.;
+  }
+  o = vec4(T, 0., 0., 1.);
+}
+`);
+
+const display = GLK.program(gl, GLK.common + `
+uniform sampler2D img; uniform sampler2D lut; uniform vec2 S; uniform float tmin; uniform float tmax; uniform float seed; uniform float eqMix;
+vec3 ironbow(float x){
+  x = clamp(x, 0., 1.);
+  vec3 c0 = vec3(0., 0., .02), c1 = vec3(.13, .0, .42), c2 = vec3(.56, .02, .55), c3 = vec3(.86, .18, .22), c4 = vec3(.98, .47, .03), c5 = vec3(1., .78, .1), c6 = vec3(1., .98, .82);
+  if (x < .14) return mix(c0, c1, x / .14);
+  if (x < .34) return mix(c1, c2, (x - .14) / .2);
+  if (x < .52) return mix(c2, c3, (x - .34) / .18);
+  if (x < .7) return mix(c3, c4, (x - .52) / .18);
+  if (x < .87) return mix(c4, c5, (x - .7) / .17);
+  return mix(c5, c6, (x - .87) / .13);
+}
+float Tat(vec2 u){ return texture(img, u).r; }
+void main(){
+  vec2 px = 1. / S;
+  // soft LWIR optics: small blur, then mild edge enhancement like a real camera's processing
+  float t = Tat(uv) * .4 + (Tat(uv + vec2(px.x, 0)) + Tat(uv - vec2(px.x, 0)) + Tat(uv + vec2(0, px.y)) + Tat(uv - vec2(0, px.y))) * .15;
+  float bl = 0.; for (int i = -2; i <= 2; i++) for (int j = -2; j <= 2; j++) bl += Tat(uv + vec2(i, j) * px * 1.5); bl /= 25.;
+  t += (t - bl) * .35;
+  // sensor: fixed-pattern column noise + temporal noise + slight vignette (narcissus)
+  vec2 sp = floor(uv * S);
+  t += (hash2(vec2(sp.x, 7.)) - .5) * .09 + (hash2(sp + seed * 13.1) - .5) * .16;
+  vec2 d = uv - .5; t -= dot(d, d) * 1.3;
+  float lin = (t - tmin) / (tmax - tmin);
+  float eq = texture(lut, vec2(clamp((t - 5.) / 55., 0., 1.), .5)).r;
+  float x = mix(lin, eq, eqMix);
+  vec3 col = ironbow(x);
+  o = vec4(col, 1.);
+}
+`);
+
+// camera: handheld at chest height near the back of the room, looking toward the door
+const cam = portrait ? { pos: [-0.5, 1.55, -2.4], tgt: [0.85, 0.7, 1.0], fov: 0.66 } : { pos: [-0.9, 1.55, -2.2], tgt: [0.75, 0.78, 1.0], fov: 0.72 };
+const spotEl = document.getElementById('spot'), tlEl = document.getElementById('tl');
+const bar = document.getElementById('bar');
+const stops = [[0,'#000005'],[.14,'#21006b'],[.34,'#8f058c'],[.52,'#db2e38'],[.7,'#fa7808'],[.87,'#ffc71a'],[1,'#fffad1']];
+bar.style.background = 'linear-gradient(to top,' + stops.map(s => s[1] + ' ' + (s[0] * 100) + '%').join(',') + ')';
+document.getElementById('bmax').textContent = TMAX.toFixed(1); document.getElementById('bmin').textContent = TMIN.toFixed(1);
+const buf = new Float32Array(4);
+const NB = 1024, lutData = new Float32Array(NB * 4);
+for (let i = 0; i < NB; i++) lutData[i * 4] = Math.min(1, Math.max(0, (5 + 55 * i / (NB - 1) - TMIN) / (TMAX - TMIN)));
+const lutTex = GLK.texture(gl, NB, 1, lutData, { float: true, linear: true });
+const all = new Float32Array(SW * SH * 4);
+function equalize(){
+  gl.bindFramebuffer(gl.FRAMEBUFFER, temp.fb);
+  gl.readPixels(0, 0, SW, SH, gl.RGBA, gl.FLOAT, all);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  const h = new Float32Array(NB); let n = 0;
+  for (let i = 0; i < all.length; i += 4){ const b = Math.round((all[i] - 5) / 55 * (NB - 1)); if (b >= 0 && b < NB){ h[b]++; n++; } }
+  const plateau = n * 0.004; let tot = 0;
+  for (let i = 0; i < NB; i++){ h[i] = Math.min(h[i], plateau); tot += h[i]; }
+  let acc = 0;
+  for (let i = 0; i < NB; i++){ acc += h[i]; const v = acc / tot; lutData[i * 4] = lutData[i * 4] * 0.6 + v * 0.4; }
+  gl.bindTexture(gl.TEXTURE_2D, lutTex);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, NB, 1, gl.RGBA, gl.FLOAT, lutData);
+}
+let frame = 0, t0 = performance.now();
+const fixedT = Q.has('t') ? +Q.get('t') : null;
+function draw(now){
+  const T = fixedT !== null ? fixedT : (now - t0) / 1000;
+  GLK.draw(gl, scene, { R: [SW, SH], camPos: cam.pos, camTgt: cam.tgt, fov: cam.fov, T0: T }, temp);
+  if (frame % 4 === 0) equalize();
+  GLK.draw(gl, display, { img: temp, lut: lutTex, S: [SW, SH], tmin: TMIN, tmax: TMAX, seed: frame % 64, eqMix: EQ }, null);
+  if (frame % 6 === 0){
+    gl.bindFramebuffer(gl.FRAMEBUFFER, temp.fb);
+    gl.readPixels(SW >> 1, SH >> 1, 1, 1, gl.RGBA, gl.FLOAT, buf);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    spotEl.textContent = buf[0].toFixed(1) + ' °C';
+  }
+  tlEl.textContent = '▲ 96.0   ▼ 8.4   ε 0.95';
+  frame++; requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+window.__ready = () => frame > 10;
+</script>
+</body></html>

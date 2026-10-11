@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>As Hangs — spike</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden;touch-action:none;overscroll-behavior:none}</style>
+</head><body>
+<script src="../lib/glkit.js"></script>
+<script src="../lib/ptlib.js"></script>
+<script src="../lib/spike.js"></script>
+<script>
+// ---------- 1. hang a chain (2D Verlet + distance constraints), ends pinned at the ceiling hooks ----------
+const Q = SPIKE.Q;
+const N = 48, SPAN = 1.0, LEN = +(Q.get('len') || 1.42);
+const SACK = Q.has('sack') ? +Q.get('sack') : 0.62;   // sack position along the chain (0..1), <0 = none
+const SACKW = +(Q.get('w') || 9);                      // sack weight in link-masses
+function hang(){
+  const seg = LEN / N, P = [], O = [];
+  for (let i = 0; i <= N; i++){ const t = i / N; const x = -SPAN / 2 + SPAN * t; const y = -0.55 * Math.sin(Math.PI * t); P.push([x, y]); O.push([x, y]); }
+  const k = SACK >= 0 ? Math.round(SACK * N) : -1;
+  const m = P.map((_, i) => 1 + (i === k ? SACKW : 0));
+  for (let it = 0; it < 6000; it++){
+    for (let i = 1; i < N; i++){ const vx = (P[i][0] - O[i][0]) * .985, vy = (P[i][1] - O[i][1]) * .985; O[i] = [P[i][0], P[i][1]]; P[i] = [P[i][0] + vx, P[i][1] + vy - 2e-5]; }
+    for (let c = 0; c < 12; c++){
+      for (let i = 0; i < N; i++){
+        const a = P[i], b = P[i + 1]; const dx = b[0] - a[0], dy = b[1] - a[1]; const d = Math.hypot(dx, dy) || 1e-9; const diff = (d - seg) / d;
+        const wa = i === 0 ? 0 : 1 / m[i], wb = i + 1 === N ? 0 : 1 / m[i + 1]; const ws = wa + wb || 1;
+        a[0] += dx * diff * wa / ws; a[1] += dy * diff * wa / ws; b[0] -= dx * diff * wb / ws; b[1] -= dy * diff * wb / ws;
+      }
+    }
+  }
+  const S = [0]; for (let i = 1; i <= N; i++) S.push(S[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]));
+  return { P, S, k, seg };
+}
+const chain = hang();
+const Pflat = new Float32Array(2 * (N + 1)); chain.P.forEach((p, i) => { Pflat[2 * i] = p[0]; Pflat[2 * i + 1] = p[1]; });
+const Sflat = new Float32Array(chain.S);
+const portrait = innerHeight > innerWidth;
+
+// ---------- 2. path tracer: top half = stone world (x10 scale, inverted), bottom half = workshop (model scale) ----------
+SPIKE.run({
+  samples: 400, scale: portrait ? 0.75 : 0.6,
+  uniforms: () => ({ P: { v2: Pflat }, S: Sflat, NP: { i: N + 1 }, SEG: chain.seg, SACKI: { i: chain.k }, SACKW, PORT: portrait ? 1 : 0 }),
+  trace: `
+uniform vec2 P[49]; uniform float S[49]; uniform int NP; uniform float SEG; uniform int SACKI; uniform float SACKW; uniform float PORT;
+const float SC = 10.;
+const vec3 SUN = normalize(vec3(-.95, .15, -.2));
+vec3 skyL(vec3 d){
+  float y = max(d.y, 0.), mu = dot(d, SUN);
+  vec3 zen = vec3(.10, .19, .42), hor = vec3(.80, .66, .52), opp = vec3(.42, .40, .52);
+  float az = .5 + .5 * dot(normalize(d.xz + 1e-5), normalize(SUN.xz));
+  vec3 h = mix(opp, hor, az);
+  vec3 c = mix(h, zen, pow(y, .45));
+  c += vec3(1., .55, .22) * (.9 * pow(max(mu, 0.), 18.) + .35 * pow(max(mu, 0.), 4.)) * (1. - .6 * y);
+  return c * .55;
+}
+mat2 rot(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+
+// nearest point on the hanging polyline (model coords): distance, arc length, segment index, tangent
+float poly(vec2 q, out float sArc, out int idx, out vec2 tg){
+  float best = 1e9; sArc = 0.; idx = 0; tg = vec2(1, 0);
+  for (int i = 0; i < 48; i++){
+    vec2 a = P[i], b = P[i + 1], ba = b - a, pa = q - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0., 1.);
+    float d = length(pa - ba * h);
+    if (d < best){ best = d; idx = i; sArc = mix(S[i], S[i + 1], h); tg = normalize(ba); }
+  }
+  return best;
+}
+
+// ======== STONE WORLD (metres) ========
+// arch = the inverted chain scaled by SC; rectangular section 0.62 m (in plane) x 1.15 m (deep)
+float stoneNoise(vec3 p){ return fbm(p.xy * 3.1 + p.z * 1.7) * .6 + fbm(p.zy * 7.3 + 4.) * .4; }
+vec2 mapTop(vec3 p){
+  vec2 q = vec2(p.x, -p.y) / SC; float sA; int ii; vec2 tg;
+  float d2 = poly(q, sA, ii, tg) * SC;
+  float dIn = d2 - .31, dz = abs(p.z) - .58;
+  float arch = length(max(vec2(dIn, dz), 0.)) + min(max(dIn, dz), 0.);
+  // voussoir joints: shallow grooves every ~0.55 m of arc, plus edge wear
+  float u = sA * SC / .56; float j = abs(fract(u) - .5);
+  float sid = floor(u);
+  float off = (hash1(uint(sid + 91.) * 2654435761U) - .5) * .022;
+  arch += off * smoothstep(.0, .3, -dz) * 0. + off * .5;
+  arch += .022 * smoothstep(.455, .5, j);
+  float edge = smoothstep(.06, .0, abs(dIn)) + smoothstep(.06, .0, abs(dz));
+  arch += .016 * (stoneNoise(p * 1.7) - .5) * (.35 + edge) + .004 * (fbm(p.xy * 23. + p.z * 11.) - .5);
+  vec2 r = vec2(arch, 1.);
+  // footings
+  for (int s = 0; s < 2; s++){ float x = s == 0 ? -SC * .5 : SC * .5; float f = sdBox(p - vec3(x, .25, 0.), vec3(.55, .25, .78)) - .02; if (f < r.x) r = vec2(f, 2.); }
+  // pinnacle standing on the arch where the sack hangs below
+  if (SACKI > 0){
+    vec2 c = P[SACKI] * vec2(SC, -SC);
+    float H = .36 * SACKW;
+    vec3 pp = p - vec3(c.x, c.y + .2, 0.);
+    float taper = 1. - .45 * clamp(pp.y / H, 0., 1.);
+    float tw = sdBox(pp - vec3(0., H * .5, 0.), vec3(.36 * taper, H * .5, .42 * taper));
+    vec3 cp = pp - vec3(0., H, 0.); float cap = max(abs(cp.x) * .9 + cp.y * .38 - .2, abs(cp.z) * .9 + cp.y * .38 - .24); cap = max(cap, -cp.y);
+    tw = min(tw, cap);
+    tw += .004 * (stoneNoise(p * 1.3) - .5);
+    if (tw < r.x) r = vec2(tw, 1.);
+  }
+  return r;
+}
+// ======== WORKSHOP (model metres) ========
+float linkSD(vec3 p, int i){
+  vec2 a = P[i], b = P[i + 1]; vec2 m = (a + b) * .5; vec2 t = normalize(b - a);
+  vec3 q = p - vec3(m, 0.);
+  float u = dot(q.xy, t), v = dot(q.xy, vec2(-t.y, t.x)), w = q.z;
+  if ((i & 1) == 1){ float tmp = v; v = w; w = tmp; }
+  float hl = SEG * .5 - .0095, R = .0102, r = .0052;
+  float dc = length(vec2(max(abs(u) - hl * .55, 0.), v)) - R;
+  return length(vec2(dc, w)) - r;
+}
+vec2 mapBot(vec3 p){
+  vec2 r = vec2(1e9, 0.);
+  float sA; int ii; vec2 tg;
+  float d2 = poly(p.xy, sA, ii, tg);
+  float bound = length(vec2(d2, p.z)) - .022;
+  if (bound < .03){
+    float c = 1e9;
+    for (int k = -2; k <= 2; k++){ int j = clamp(ii + k, 0, 47); c = min(c, linkSD(p, j)); }
+    r = vec2(c, 10.);
+  } else r = vec2(bound, 10.);
+  // hooks: a small iron ring under a square shank screwed into the ceiling
+  for (int s = 0; s < 2; s++){
+    vec3 hq = p - vec3(s == 0 ? -.5 : .5, -.013, 0.);
+    float hk = length(vec2(length(hq.xy) - .009, hq.z)) - .0026;
+    hk = min(hk, sdBox(hq - vec3(0., .0115, 0.), vec3(.0028, .0035, .0028)));
+    hk = min(hk, sdBox(hq - vec3(0., .0125, 0.), vec3(.008, .0006, .008)));
+    if (hk < r.x) r = vec2(hk, 11.);
+  }
+  // sack of shot
+  if (SACKI > 0){
+    vec2 c = P[SACKI];
+    float str = sdCaps(p, vec3(c, 0.), vec3(c + vec2(0., -.022), 0.), .0012);
+    vec3 sq = p - vec3(c + vec2(0., -.05), 0.);
+    float sz = .021 * pow(SACKW / 9., .33);
+    float sk = length(sq / vec3(1., 1.25, 1.) ) - sz;
+    sk += .0016 * (fbm(sq.xy * 260. + sq.z * 90.) - .5) + .0025 * smoothstep(.0, .02, sq.y);
+    float neck = sdCaps(p, vec3(c + vec2(0., -.024), 0.), vec3(c + vec2(0., -.034), 0.), .0045);
+    sk = smin(sk, neck, .006);
+    if (str < r.x) r = vec2(str, 13.);
+    if (sk < r.x) r = vec2(sk, 12.);
+  }
+  // lamp bulb
+  float lb = length(p - vec3(-.46, -.27, -.13)) - .022; if (lb < r.x) r = vec2(lb, 20.);
+  return r;
+}
+
+vec2 mapW(vec3 p, bool top){ return top ? mapTop(p) : mapBot(p); }
+vec3 nrmW(vec3 p, bool top){ vec2 e = vec2(top ? .002 : .00015, 0.); return normalize(vec3(mapW(p + e.xyy, top).x - mapW(p - e.xyy, top).x, mapW(p + e.yxy, top).x - mapW(p - e.yxy, top).x, mapW(p + e.yyx, top).x - mapW(p - e.yyx, top).x)); }
+
+// room planes (workshop): ceiling y=0 (from below), floor y=-1.3, back wall z=.38, left x=-.95 (with window), right x=.95, front z=-1.6
+float roomHit(vec3 ro, vec3 rd, out vec3 n, out float mat){
+  float t = 1e9; n = vec3(0); mat = 0.;
+  if (rd.y > 0.){ float tt = -ro.y / rd.y; if (tt < t){ t = tt; n = vec3(0, -1, 0); mat = 30.; } }
+  if (rd.y < 0.){ float tt = (-1.3 - ro.y) / rd.y; if (tt < t){ t = tt; n = vec3(0, 1, 0); mat = 31.; } }
+  if (rd.z > 0.){ float tt = (.38 - ro.z) / rd.z; if (tt < t){ t = tt; n = vec3(0, 0, -1); mat = 32.; } }
+  if (rd.z < 0.){ float tt = (-1.6 - ro.z) / rd.z; if (tt < t){ t = tt; n = vec3(0, 0, 1); mat = 32.; } }
+  if (rd.x < 0.){ float tt = (-.95 - ro.x) / rd.x; if (tt < t){ t = tt; n = vec3(1, 0, 0); mat = 33.; } }
+  if (rd.x > 0.){ float tt = (.95 - ro.x) / rd.x; if (tt < t){ t = tt; n = vec3(-1, 0, 0); mat = 32.; } }
+  return t;
+}
+
+// intersection for either world. returns t (or -1), normal, material
+float hitW(vec3 ro, vec3 rd, bool top, out vec3 n, out float mat){
+  float tmax = top ? 400. : 6.;
+  float tPlane = 1e9; vec3 np = vec3(0); float mp = 0.;
+  if (top){ if (rd.y < 0.){ tPlane = -ro.y / rd.y; np = vec3(0, 1, 0); mp = 3.; } }
+  else tPlane = roomHit(ro, rd, np, mp);
+  float t = top ? .01 : .0005;
+  for (int i = 0; i < 200; i++){
+    vec3 p = ro + rd * t; vec2 h = mapW(p, top);
+    if (h.x < (top ? .0015 : .00006) * max(t, 1.)){ if (t < tPlane){ n = nrmW(p, top); mat = h.y; return t; } break; }
+    t += h.x * .85;
+    if (t > min(tmax, tPlane)) break;
+  }
+  if (tPlane < 1e8){ n = np; mat = mp; return tPlane; }
+  return -1.;
+}
+bool occluded(vec3 ro, vec3 rd, float maxT, bool top){ vec3 n; float m; float t = hitW(ro, rd, top, n, m); return t > 0. && t < maxT; }
+
+// materials
+vec3 albedoTop(vec3 p, float mat){
+  if (mat == 3.){ // dry plain: pale earth, sparse dark scrub
+    float g = fbm(p.xz * .7) * .5 + fbm(p.xz * 6.) * .5;
+    vec3 c = mix(vec3(.46, .38, .28), vec3(.56, .48, .36), g);
+    c *= .78 + .3 * smoothstep(.55, .75, fbm(p.xz * 1.9 + 7.));
+    return c;
+  }
+  vec2 q = vec2(p.x, -p.y) / SC; float sA; int ii; vec2 tg; poly(q, sA, ii, tg);
+  float stone = floor(sA * SC / .56);
+  float v = hash1(uint(stone + 50.) * 7919U);
+  vec3 c = mix(vec3(.70, .62, .50), vec3(.78, .70, .56), v);
+  c *= .86 + .2 * stoneNoise(p * 2.);
+  float j = abs(fract(sA * SC / .56) - .5); c *= 1. - .35 * smoothstep(.465, .5, j);
+  if (mat == 2.) c *= .92;
+  // weathering: darker toward the ground, faint lichen
+  c *= .86 + .14 * smoothstep(0., 1.6, p.y);
+  c = mix(c, vec3(.55, .56, .44), .25 * smoothstep(.6, .85, fbm(p.xy * 2.2 + p.z)));
+  return c;
+}
+vec3 albedoBot(vec3 p, float mat){
+  if (mat == 30.){ float pl = abs(fract(p.z * 9.) - .5); vec3 w = mix(vec3(.30, .19, .11), vec3(.38, .25, .14), fbm(vec2(p.x * 3., p.z * 40.))); return w * (1. - .4 * smoothstep(.46, .5, pl)); }
+  if (mat == 31.) return vec3(.22, .19, .16);
+  if (mat == 32. || mat == 33.){ float n = fbm(p.xy * 6. + p.z * 3.) * .6 + fbm(p.xy * 40.) * .4; return mix(vec3(.58, .52, .43), vec3(.66, .60, .50), n) * (1. - .12 * smoothstep(.5, .8, fbm(p.xy * 2.5))); }
+  if (mat == 12.){ return mix(vec3(.42, .33, .21), vec3(.52, .42, .28), fbm(p.xy * 400.)); }
+  if (mat == 13.) return vec3(.5, .45, .35);
+  return vec3(.3);
+}
+
+vec3 trace(vec3 ro, vec3 rd, bool top){
+  vec3 L = vec3(0), thr = vec3(1);
+  for (int b = 0; b < 4; b++){
+    vec3 n; float mat;
+    float t = hitW(ro, rd, top, n, mat);
+    if (t < 0.){
+      if (top){ vec3 sky = skyL(rd); if (b == 0 && dot(rd, SUN) > .99996) sky += vec3(40., 26., 12.); L += thr * sky; }
+      break;
+    }
+    vec3 p = ro + rd * t;
+    if (mat == 20.){ if (b == 0) L += thr * vec3(1., .62, .3) * 60.; break; }
+    // window on the workshop's left wall: cool daylight panel
+    if (mat == 33. && p.y > -.75 && p.y < -.18 && p.z > -.9 && p.z < -.35){ L += thr * vec3(.25, .33, .45) * (b == 0 ? .25 : .9); break; }
+    bool metal = (mat == 10. || mat == 11.);
+    vec3 alb = top ? albedoTop(p, mat) : albedoBot(p, mat);
+    vec3 po = p + n * (top ? .003 : .00008);
+    // --- next-event estimation
+    if (top){
+      vec3 ld = coneDir(SUN, .99996);
+      float c = dot(n, ld);
+      if (c > 0. && !occluded(po, ld, 1e9, true)) L += thr * alb / PI * vec3(3.1, 2.15, 1.25) * c;
+    } else {
+      vec3 lc = vec3(-.46, -.27, -.13); vec3 lp = lc + normalize(vec3(rnd() - .5, rnd() - .5, rnd() - .5)) * .022;
+      vec3 ld = lp - po; float dist = length(ld); ld /= dist;
+      float c = dot(n, ld);
+      if (c > 0. && !occluded(po, ld, dist - .025, false)){
+        vec3 Le = vec3(1., .62, .3) * 60.;
+        float G = c * (PI * .022 * .022) / (dist * dist);
+        if (metal){ vec3 h = normalize(ld - rd); float a = .28; float a2 = a * a; float nh = max(dot(n, h), 0.); float D = a2 / (PI * pow(nh * nh * (a2 - 1.) + 1., 2.));
+          float F = fresnelSchlick(max(dot(h, -rd), 0.), .56); L += thr * Le * G * D * F / (4. * max(dot(n, -rd), .05)) * vec3(.95, .9, .85); }
+        else L += thr * alb / PI * Le * G;
+      }
+    }
+    // --- bounce
+    if (metal){
+      vec3 h = ggxH(n, .28); vec3 nd = reflect(rd, h);
+      if (dot(nd, n) <= 0.) break;
+      thr *= vec3(.55, .52, .48) * fresnelSchlick(max(dot(h, -rd), 0.), .56) * 1.6;
+      rd = nd;
+    } else { rd = cosHemi(n); thr *= alb; }
+    ro = po;
+    if (b > 1){ float pr = max(thr.r, max(thr.g, thr.b)); if (rnd() > pr) break; thr /= pr; }
+  }
+  return L;
+}
+
+void main(){
+  rngInit(gl_FragCoord.xy, F);
+  vec2 px = gl_FragCoord.xy + rnd2() - .5;
+  float split = R.y * .5;
+  bool top = px.y >= split;
+  // each half uses a camera whose lower (or upper) edge lies on the ground/ceiling line
+  float hy = top ? (px.y - split) : (split - px.y);           // 0 at the mirror line, growing away from it
+  vec2 sp = vec2((px.x - .5 * R.x) / (R.y * .5), hy / (R.y * .5)); // y in [0,1]
+  float fovV = PORT > .5 ? .62 : .78;
+  // camera in stone-world metres; workshop camera is the mirror image at model scale
+  vec3 eye = vec3(2.3, .3, -9.4);
+  float pitch = .3, yaw = -.21;
+  vec3 dir = normalize(vec3(sp.x * fovV, (sp.y - .5) * fovV + 0., 1.));
+  dir.yz = rot(pitch) * dir.yz; dir.xz = rot(yaw) * dir.xz;
+  // make the half's bottom edge look exactly at the arch's feet line
+  vec3 col;
+  if (top){ col = trace(eye, dir, true); }
+  else { vec3 e = vec3(eye.x, -eye.y, eye.z) / SC; vec3 d = vec3(dir.x, -dir.y, dir.z); col = trace(e, d, false) * 2.2; }
+  col = min(col, vec3(top ? 12. : 6.));
+  vec3 old = texture(prev, uv).rgb;
+  o = vec4(mix(old, col, 1. / float(F + 1)), 1.);
+}`,
+  display: `
+
+void main(){
+  vec3 c = texture(img, uv).rgb;
+  bool top = uv.y >= .5;
+  c *= top ? 1.25 : 3.2;
+  c = tonemap(c);
+  // gentle split line and vignette
+  float v = 1. - .35 * pow(length((uv - .5) * vec2(1.1, 1.)), 2.4); c *= v;
+  float g = (hash2(gl_FragCoord.xy + float(F)) - .5) / 255.;
+  o = vec4(toSRGB(c) + g, 1.);
+}`
+});
+window.__ready = () => SPIKE.state.done;
+</script></body></html>

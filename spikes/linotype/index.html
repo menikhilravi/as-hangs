@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Linotype — spike</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}</style>
+</head><body>
+<script src="../lib/glkit.js"></script>
+<script src="../lib/ptlib.js"></script>
+<script src="../lib/spike.js"></script>
+<script>
+// ---- glyph distance fields from a system serif (Felzenszwalb EDT) ----
+const Q = SPIKE.Q;
+const WORD = (Q.get('word') || 'hot metal').slice(0, 12);
+const G = 128;
+function edt1(f, n){ const d = new Float32Array(n), v = new Int32Array(n), z = new Float32Array(n + 1); let k = 0; v[0] = 0; z[0] = -1e20; z[1] = 1e20;
+  for (let q = 1; q < n; q++){ let s; do { const r = v[k]; s = ((f[q] + q * q) - (f[r] + r * r)) / (2 * q - 2 * r); } while (s <= z[k] && --k >= 0); k++; v[k] = q; z[k] = s; z[k + 1] = 1e20; }
+  k = 0; for (let q = 0; q < n; q++){ while (z[k + 1] < q) k++; const r = v[k]; d[q] = (q - r) * (q - r) + f[r]; } return d; }
+function edt2(grid, w, h){ const out = new Float32Array(w * h), col = new Float32Array(h);
+  for (let x = 0; x < w; x++){ for (let y = 0; y < h; y++) col[y] = grid[y * w + x]; const d = edt1(col, h); for (let y = 0; y < h; y++) out[y * w + x] = d[y]; }
+  const row = new Float32Array(w); for (let y = 0; y < h; y++){ for (let x = 0; x < w; x++) row[x] = out[y * w + x]; const d = edt1(row, w); for (let x = 0; x < w; x++) out[y * w + x] = Math.sqrt(d[x]); } return out; }
+const cv = document.createElement('canvas'); cv.width = G; cv.height = G; const cx = cv.getContext('2d', { willReadFrequently: true });
+const chars = [...WORD];
+const atlas = new Float32Array(G * chars.length * G * 4);
+const widths = [];
+cx.font = `${Math.round(G * .56)}px "Baskerville","Times New Roman",serif`;
+chars.forEach((ch, k) => {
+  cx.fillStyle = '#000'; cx.fillRect(0, 0, G, G); cx.fillStyle = '#fff'; cx.textAlign = 'center'; cx.textBaseline = 'alphabetic';
+  cx.fillText(ch, G / 2, G * .7);
+  widths.push(ch === ' ' ? 0 : cx.measureText(ch).width / G);
+  const im = cx.getImageData(0, 0, G, G).data, inside = new Float32Array(G * G), outside = new Float32Array(G * G);
+  for (let i = 0; i < G * G; i++){ const on = im[i * 4] > 127; inside[i] = on ? 0 : 1e20; outside[i] = on ? 1e20 : 0; }
+  const dIn = edt2(inside, G, G), dOut = edt2(outside, G, G);
+  for (let y = 0; y < G; y++) for (let x = 0; x < G; x++){
+    const sd = (dIn[y * G + x] - dOut[y * G + x]) / G; // >0 outside glyph... (dIn = distance to glyph, dOut = distance to background)
+    const o = ((G - 1 - y) * G * chars.length + k * G + x) * 4; atlas[o] = sd; atlas[o + 1] = 0; atlas[o + 2] = 0; atlas[o + 3] = 1;
+  }
+});
+// matrix thickness (mm) from glyph width; spaces become steel spacebands
+const thick = [], offs = []; let xx = 0;
+chars.forEach((ch, k) => { const t = ch === ' ' ? 1.6 : Math.max(1.1, widths[k] * 7.2); thick.push(t); offs.push(xx + t / 2); xx += t + .16; });
+const total = xx;
+const offF = new Float32Array(16), thF = new Float32Array(16), spF = new Float32Array(16);
+chars.forEach((ch, k) => { offF[k] = offs[k] - total / 2; thF[k] = thick[k]; spF[k] = ch === ' ' ? 1 : 0; });
+
+let atlasTex;
+SPIKE.run({
+  samples: 360, scale: .75,
+  uniforms: (T, f) => {
+    if (!atlasTex){ atlasTex = GLK.texture(SPIKE.gl, G * chars.length, G, atlas, { float: true, linear: true }); }
+    return { ATL: atlasTex, NCH: { i: chars.length }, OFF: { f: offF }, TH: { f: thF }, SP: { f: spF }, TOT: total };
+  },
+  trace: `
+uniform sampler2D ATL; uniform int NCH; uniform float OFF[16]; uniform float TH[16]; uniform float SP[16]; uniform float TOT;
+// units: millimetres. Matrices stand in a row along x; casting edge faces -z (toward camera); teeth on top (+y).
+const float H = 15.8, D = 8.6;
+float glyphSD(vec2 uvg, int k){ // uvg in glyph cell units [0,1]
+  if (uvg.x < 0. || uvg.x > 1. || uvg.y < 0. || uvg.y > 1.) return 1.;
+  return texture(ATL, vec2((float(k) + uvg.x) / float(NCH), uvg.y)).r;
+}
+float matrixSD(vec3 q, float w, int k){
+  float body = sdBox(q, vec3(w * .5 - .1, H - .1, D - .1)) - .12;
+  // V-notch and teeth across the top
+  float y0 = H - 6.2, kk = .62;
+  float tooth = .55 * step(.5, fract(q.y / 1.25 + float(k) * .37)) * step(y0 + .6, q.y);
+  float cut = (abs(q.z) - ((q.y - y0) * kk + tooth)) / 1.18;
+  body = max(body, -cut);
+  // ears (lugs) top and bottom, front and back
+  float ears = min(sdBox(vec3(q.x, q.y - (H - 1.9), abs(q.z) - (D + .9)), vec3(w * .5 - .03, 1.9, .9)),
+                   sdBox(vec3(q.x, q.y + (H - 2.3), abs(q.z) - (D + .9)), vec3(w * .5 - .03, 2.3, .9)));
+  body = min(body, ears - .04);
+  // the character, punched into the casting edge: lower rail roman, upper rail italic-ish (sheared)
+  float gs = 5.4; // glyph cell size in mm
+  vec2 g1 = vec2(-q.x / gs + .5, (q.y + 3.6) / gs + .5);
+  vec2 g2 = vec2(-(q.x + (q.y - 3.)*.18) / gs + .5, (q.y - 3.) / gs + .5);
+  float gl = min(glyphSD(g1, k), glyphSD(g2, k)) * gs;
+  float carve = max(gl, q.z + D - .45);
+  body = max(body, -carve);
+  // tiny stamped numerals on the side would go here
+  return body;
+}
+float spacebandSD(vec3 q){ // steel wedge band, taller than matrices
+  float w = 1.3 + .6 * smoothstep(-H, H, q.y);
+  float b = sdBox(q - vec3(0., 3., 0.), vec3(w * .5, H + 4., D * .75)) - .05;
+  return b;
+}
+vec2 map(vec3 p){
+  vec2 r = vec2(1e9, 0.);
+  for (int i = 0; i < 16; i++){
+    if (i >= NCH) break;
+    vec3 q = p - vec3(OFF[i] * 3.1, 0., float(i) * 1.2);
+    q.xz = mat2(cos(.62), -sin(.62), sin(.62), cos(.62)) * q.xz;
+    if (abs(q.x) > TH[i] * .5 + 6.) continue;
+    float d = SP[i] > .5 ? spacebandSD(q) : matrixSD(q, TH[i], i);
+    if (d < r.x) r = vec2(d, SP[i] > .5 ? 2. : 1. + float(i) * .001);
+  }
+  // assembler rail under the line, and a back plate
+  float rail = p.y + H + .12;
+  if (rail < r.x) r = vec2(rail, 3.);
+  return r;
+}
+vec3 nrm(vec3 p){ vec2 e = vec2(.004, 0.); return normalize(vec3(map(p + e.xyy).x - map(p - e.xyy).x, map(p + e.yxy).x - map(p - e.yxy).x, map(p + e.yyx).x - map(p - e.yyx).x)); }
+float march(vec3 ro, vec3 rd){ float t = .5; for (int i = 0; i < 220; i++){ vec2 h = map(ro + rd * t); if (h.x < .003) return t; t += h.x * .8; if (t > 400.) break; } return -1.; }
+vec3 env(vec3 d){
+  vec3 c = vec3(.012, .01, .009) * (1. + d.y);
+  c += vec3(1., .82, .6) * 3.2 * smoothstep(.55, .8, dot(d, normalize(vec3(-.25, .8, -.55))));   // big warm softbox above the camera
+  c += vec3(1., .86, .7) * 5. * pow(max(dot(d, normalize(vec3(-1., .25, .1))), 0.), 40.);         // strip light, left
+  c += vec3(.55, .65, .85) * 1.4 * pow(max(dot(d, normalize(vec3(.8, .35, .6))), 0.), 8.);       // cool rim
+  c += vec3(1., .7, .4) * 25. * smoothstep(.9994, .9998, dot(d, normalize(vec3(-.2, .25, 1.))));  // a lamp behind, for bokeh
+  return c;
+}
+void main(){
+  rngInit(gl_FragCoord.xy, F);
+  vec2 p = (gl_FragCoord.xy + rnd2() - .5 * R) / R.y;
+  vec3 eye = vec3(-30., 26., -70.), tgt = vec3(-8., 1., -2.);
+  vec3 fw = normalize(tgt - eye), rt = normalize(cross(vec3(0, 1, 0), fw)), up = cross(fw, rt);
+  float fl = 1.75;
+  vec3 dir = normalize(fw * fl + p.x * rt + p.y * up);
+  // thin lens: focus on the 3rd matrix's casting edge
+  float fd = length(tgt - eye) / dot(dir, fw) * 1.;
+  vec3 fp = eye + dir * fd;
+  vec2 ap = rnd2(); float ar = 1.5 * sqrt(ap.x), aa = 6.2831853 * ap.y;
+  vec3 ro = eye + (rt * cos(aa) + up * sin(aa)) * ar;
+  vec3 rd = normalize(fp - ro);
+  vec3 L = vec3(0), thr = vec3(1);
+  for (int b = 0; b < 4; b++){
+    float t = march(ro, rd);
+    if (t < 0.){ L += thr * env(rd); break; }
+    vec3 pos = ro + rd * t, n = nrm(pos);
+    float mid = map(pos).y;
+    vec3 f0; float rough;
+    if (mid >= 1. && mid < 2.){ // brass: worn bright on edges, darker oxidised in recesses
+      float wear = smoothstep(.45, .8, fbm(pos.xy * .9 + pos.z * .4));
+      f0 = mix(vec3(.88, .68, .36), vec3(.98, .84, .54), wear);
+      rough = mix(.32, .16, wear) + .08 * fbm(pos.yz * 6.);
+      if (pos.z < -D + .5 && n.z > -.5) { f0 *= .55; rough = .55; } // inside the punch
+    } else if (mid == 2.){ f0 = vec3(.62, .62, .64); rough = .18 + .1 * fbm(pos.xy * 3.); }
+    else { f0 = vec3(.32, .32, .34); rough = .42; }
+    vec3 h = ggxH(n, rough); vec3 nd = reflect(rd, h);
+    if (dot(nd, n) <= 0.) break;
+    float vh = max(dot(h, -rd), 0.);
+    thr *= f0 + (1. - f0) * pow(1. - vh, 5.);
+    ro = pos + n * .01; rd = nd;
+  }
+  L = min(L, vec3(20.));
+  vec3 old = texture(prev, uv).rgb;
+  o = vec4(mix(old, L, 1. / float(F + 1)), 1.);
+}`,
+  display: `
+void main(){
+  vec3 c = texture(img, uv).rgb * 1.5;
+  c = tonemap(c);
+  float v = 1. - .4 * pow(length((uv - .5) * vec2(1.2, 1.)), 2.2); c *= v;
+  float g = (hash2(gl_FragCoord.xy + float(F)) - .5) / 255.;
+  o = vec4(toSRGB(c) + g, 1.);
+}`
+});
+window.__ready = () => SPIKE.state.done;
+</script></body></html>

@@ -1,0 +1,30 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>smoke</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}canvas{display:block;width:100vw;height:100vh}</style>
+</head><body><canvas id="c"></canvas>
+<script src="../lib/glkit.js"></script>
+<script>
+const c = document.getElementById('c');
+const dpr = Math.min(devicePixelRatio, 2);
+c.width = innerWidth * dpr; c.height = innerHeight * dpr;
+const gl = GLK.init(c);
+const acc = [GLK.target(gl, c.width, c.height), GLK.target(gl, c.width, c.height)];
+const trace = GLK.program(gl, GLK.common + `
+uniform sampler2D prev;
+void main(){
+  vec2 p = (gl_FragCoord.xy - .5*R) / R.y;
+  vec3 col = .5 + .5*cos(6.28*(p.x + vec3(0,.33,.67)) + T);
+  vec3 old = texture(prev, uv).rgb;
+  o = vec4(mix(old, col, 1./float(F+1)), 1.);
+}`);
+const show = GLK.program(gl, GLK.common + `uniform sampler2D img; void main(){ o = vec4(toSRGB(tonemap(texture(img, uv).rgb)), 1.); }`);
+let f = 0;
+function frame(t){
+  GLK.draw(gl, trace, { R:[c.width,c.height], T:t*.001, F:{i:f}, prev: acc[f&1] }, acc[(f+1)&1]);
+  GLK.draw(gl, show, { img: acc[(f+1)&1] }, null);
+  f++; requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+window.__info = () => ({ floatRT: GLK.floatRT, w: c.width, h: c.height, frames: f });
+</script></body></html>

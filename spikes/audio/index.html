@@ -1,0 +1,35 @@
+<!doctype html><html><head><meta charset="utf-8"><title>audio test</title></head><body style="margin:0;background:#000">
+<script src="../../src/audio.js"></script>
+<script src="../../tools/spectro.js"></script>
+<script>
+(async () => {
+  const sr = 48000, dur = 12;
+  const ctx = new OfflineAudioContext(2, sr * dur, sr);
+  Sound.test.attach(ctx);
+  Sound.A.windLevel = 0.06;
+  const B = Sound.A.buffers, P = Sound.test.play, pick = Sound.test.pick, rr = Sound.test.rr;
+  const ws = Sound.A.wsIn, st = Sound.A.stIn;
+  // swinging chain
+  let t = 0.3; for (let i = 0; i < 26; i++){ t += rr(0.02, 0.12); P(pick(B.clink), ws, { gain: rr(0.15, 0.4), pan: rr(-0.5, 0.5), rate: rr(0.9, 1.15), when: t }); }
+  P(pick(B.sack), ws, { gain: 0.8, pan: 0.2, when: 2.3 });
+  // laying voussoirs from both feet, faster toward the crown, the keystone heavier
+  t = 3.0; for (let i = 0; i < 9; i++){ t += 0.24 - i * 0.015; P(pick(i === 8 ? B.knockBig : B.knock), st, { gain: i === 8 ? 1.2 : 0.8, pan: (i % 2 ? 0.3 : -0.3) * (1 - i / 9), when: t }); }
+  // centering struck away
+  for (let i = 0; i < 6; i++) P(pick(B.wood), st, { gain: rr(0.4, 0.8), pan: rr(-0.4, 0.4), rate: rr(0.9, 1.1), when: 4.9 + i * rr(0.04, 0.09) });
+  // crack, then collapse
+  P(pick(B.crack), st, { gain: 0.8, pan: -0.2, when: 6.5 });
+  P(pick(B.rumble), st, { gain: 1.1, when: 7.0 });
+  t = 7.0; for (let i = 0; i < 14; i++){ t += rr(0.05, 0.16); P(pick(i % 3 ? B.knock : B.knockBig), st, { gain: rr(0.5, 1.1), pan: rr(-0.6, 0.6), when: t }); }
+  const buf = await ctx.startRendering();
+  const L = buf.getChannelData(0), R = buf.getChannelData(1), mono = new Float32Array(L.length);
+  for (let i = 0; i < L.length; i++) mono[i] = (L[i] + R[i]) * .5;
+  window.__stats = analyse(mono, sr, 'as-hangs sound test: chain, sack, laying stones, centering struck, crack, collapse');
+  // wav
+  const n = L.length, ab = new ArrayBuffer(44 + n * 4), v = new DataView(ab), w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  let pk = 0; for (let i = 0; i < n; i++) pk = Math.max(pk, Math.abs(L[i]), Math.abs(R[i]));
+  w(0,'RIFF'); v.setUint32(4,36+n*4,true); w(8,'WAVE'); w(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,2,true); v.setUint32(24,sr,true); v.setUint32(28,sr*4,true); v.setUint16(32,4,true); v.setUint16(34,16,true); w(36,'data'); v.setUint32(40,n*4,true);
+  for (let i = 0; i < n; i++){ v.setInt16(44+i*4, Math.max(-1,Math.min(1,L[i]))*32767, true); v.setInt16(46+i*4, Math.max(-1,Math.min(1,R[i]))*32767, true); }
+  const u8 = new Uint8Array(ab); let s = ''; for (let i = 0; i < u8.length; i += 32768) s += String.fromCharCode.apply(null, u8.subarray(i, i + 32768));
+  window.__wav = btoa(s); window.__peak = pk; window.__done = true;
+})();
+</script></body></html>
